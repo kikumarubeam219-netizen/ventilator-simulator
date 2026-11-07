@@ -11,6 +11,7 @@ export class WaveformMonitor {
 
     // カーソル計測用
     this.cursorX = null;
+    this.isPinned = false; // クリックによる位置固定ピン留め
 
     this.padL = 44;
     this.padR = 54;
@@ -20,11 +21,28 @@ export class WaveformMonitor {
 
     // マウスカーソル計測イベント
     this.canvas.addEventListener('mousemove', (e) => {
-      const rect = this.canvas.getBoundingClientRect();
-      this.cursorX = e.clientX - rect.left;
+      if (!this.isPinned) {
+        const rect = this.canvas.getBoundingClientRect();
+        this.cursorX = e.clientX - rect.left;
+      }
     });
+
+    this.canvas.addEventListener('click', (e) => {
+      const rect = this.canvas.getBoundingClientRect();
+      const clickX = e.clientX - rect.left;
+      if (this.isPinned) {
+        this.isPinned = false;
+        this.cursorX = clickX;
+      } else {
+        this.cursorX = clickX;
+        this.isPinned = true;
+      }
+    });
+
     this.canvas.addEventListener('mouseleave', () => {
-      this.cursorX = null;
+      if (!this.isPinned) {
+        this.cursorX = null;
+      }
     });
   }
 
@@ -60,7 +78,7 @@ export class WaveformMonitor {
     this.isFrozenOverlay = false;
   }
 
-  render(peepSetting) {
+  render(peepSetting, isPaused = false) {
     const w = this.canvas.width;
     const h = this.canvas.height;
     const ctx = this.ctx;
@@ -132,7 +150,6 @@ export class WaveformMonitor {
     if (this.freezeHistory && this.freezeHistory.length > 1) {
       const fLen = this.freezeHistory.length;
 
-      // フリーズ波形：半透明破線（淡いゴーストライン）
       ctx.save();
       ctx.setLineDash([4, 3]);
 
@@ -239,26 +256,73 @@ export class WaveformMonitor {
     this.drawTag(lastX, flowY(last.flow), Math.round(last.flow), '#38bdf8');
     this.drawTag(lastX, volY(last.vol), Math.round(last.vol), '#34d399');
 
-    // 5. マウスホバー位置での縦線計測カーソル ＆ 数値・差分（Δ）ツールチップ
+    // 5. 一時停止中の状態インジケーター（画面中央上部）
+    if (isPaused) {
+      ctx.fillStyle = 'rgba(217, 119, 6, 0.25)';
+      ctx.strokeStyle = '#f59e0b';
+      ctx.lineWidth = 1;
+      ctx.fillRect(this.padL + 10, 6, 140, 18);
+      ctx.strokeRect(this.padL + 10, 6, 140, 18);
+      ctx.fillStyle = '#fef3c7';
+      ctx.font = 'bold 9px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('⏸ 一時停止中 (波形計測可能)', this.padL + 80, 15);
+    }
+
+    // 6. マウスホバー位置での縦線計測カーソル ＆ 波形ポイント ＆ 差分ツールチップ
     if (this.cursorX !== null && this.cursorX >= this.padL && this.cursorX <= w - this.padR) {
       const index = Math.round((this.cursorX - this.padL) / stepX);
       const curSample = this.history[index];
 
       if (curSample) {
-        // 縦線カーソル
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.6)';
-        ctx.lineWidth = 1;
-        ctx.setLineDash([2, 2]);
+        const curPawY = pawY(curSample.paw);
+        const curFlowY = flowY(curSample.flow);
+        const curVolY = volY(curSample.vol);
+
+        // 縦線カーソル（ピン留め時は明るい破線）
+        ctx.strokeStyle = this.isPinned ? '#38bdf8' : 'rgba(255, 255, 255, 0.75)';
+        ctx.lineWidth = 1.2;
+        ctx.setLineDash([3, 2]);
         ctx.beginPath();
         ctx.moveTo(this.cursorX, 10);
         ctx.lineTo(this.cursorX, h - 10);
         ctx.stroke();
         ctx.setLineDash([]);
 
-        // カーソル位置の測定ツールチップ
-        const fSample = (this.freezeHistory && this.freezeHistory[index]) ? this.freezeHistory[index] : null;
+        // 各波形上の計測ポイントマーカー（光る丸点）
+        const drawMarker = (x, y, color) => {
+          ctx.fillStyle = color;
+          ctx.beginPath();
+          ctx.arc(x, y, 4, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.strokeStyle = '#ffffff';
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+        };
 
-        let tipText = `Paw: ${curSample.paw.toFixed(1)} | Flow: ${Math.round(curSample.flow)} | Vol: ${Math.round(curSample.vol)}`;
+        drawMarker(this.cursorX, curPawY, '#fbbf24');
+        drawMarker(this.cursorX, curFlowY, '#38bdf8');
+        drawMarker(this.cursorX, curVolY, '#34d399');
+
+        // フリーズ波形がある場合のマーカー描画
+        const fSample = (this.freezeHistory && this.freezeHistory[index]) ? this.freezeHistory[index] : null;
+        if (fSample) {
+          const drawGhostMarker = (x, y, color) => {
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.arc(x, y, 3, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+          };
+          drawGhostMarker(this.cursorX, pawY(fSample.paw), '#fbbf24');
+          drawGhostMarker(this.cursorX, flowY(fSample.flow), '#38bdf8');
+          drawGhostMarker(this.cursorX, volY(fSample.vol), '#34d399');
+        }
+
+        // カーソル位置の測定ツールチップテキスト
+        let tipText = `Paw: ${curSample.paw.toFixed(1)} cmH2O | Flow: ${Math.round(curSample.flow)} L/min | Vol: ${Math.round(curSample.vol)} mL`;
         if (fSample) {
           const dPaw = (curSample.paw - fSample.paw).toFixed(1);
           const dPawSign = curSample.paw >= fSample.paw ? `+${dPaw}` : dPaw;
@@ -266,18 +330,21 @@ export class WaveformMonitor {
           const dVolSign = curSample.vol >= fSample.vol ? `+${dVol}` : dVol;
           tipText += ` (基準比 ΔPaw:${dPawSign}, ΔVol:${dVolSign})`;
         }
+        if (this.isPinned) {
+          tipText = `📌 [固定] ` + tipText;
+        }
 
         ctx.font = 'bold 9.5px sans-serif';
-        const textW = ctx.measureText(tipText).width + 16;
+        const textW = ctx.measureText(tipText).width + 18;
         let boxX = this.cursorX - textW / 2;
         if (boxX < this.padL) boxX = this.padL;
         if (boxX + textW > w - this.padR) boxX = w - this.padR - textW;
 
-        ctx.fillStyle = 'rgba(15, 23, 42, 0.92)';
-        ctx.strokeStyle = '#94a3b8';
-        ctx.lineWidth = 1;
-        ctx.fillRect(boxX, h - 22, textW, 18);
-        ctx.strokeRect(boxX, h - 22, textW, 18);
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.94)';
+        ctx.strokeStyle = this.isPinned ? '#38bdf8' : '#94a3b8';
+        ctx.lineWidth = 1.2;
+        ctx.fillRect(boxX, h - 23, textW, 20);
+        ctx.strokeRect(boxX, h - 23, textW, 20);
 
         ctx.fillStyle = '#f8fafc';
         ctx.textAlign = 'center';

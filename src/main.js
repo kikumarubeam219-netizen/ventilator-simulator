@@ -211,7 +211,7 @@ function loop(now) {
   if (!simPaused) {
     const sample = engine.update(dt);
     monitor.pushSample(sample);
-    monitor.render(engine.params.peep);
+    monitor.render(engine.params.peep, false);
     anatomy.render(engine, engine.params, now);
 
     // バッジ更新
@@ -227,7 +227,8 @@ function loop(now) {
       pBadge.className = 'px-2.5 py-0.5 text-xs font-bold rounded bg-slate-700 text-slate-300';
     }
   } else {
-    // 一時停止中も3Dカメラ操作（マウス回転・ズーム）は可能にする
+    // 一時停止中も波形モニターのカーソル計測＆3Dカメラ操作（マウス回転・ズーム）を継続描画
+    monitor.render(engine.params.peep, true);
     anatomy.controls.update();
     anatomy.renderer.render(anatomy.scene, anatomy.camera);
   }
