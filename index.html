@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>人工呼吸器 波形・3D解剖モデル連動シミュレーター</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Three.js ES Modules Import Map -->
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+  <style>
+    body { background-color: #0b1120; color: #f8fafc; font-family: 'Segoe UI', Meiryo, sans-serif; }
+    .panel { background-color: #1e293b; border: 1px solid #334155; border-radius: 0.5rem; }
+    input[type="range"] { accent-color: #38bdf8; }
+    .disabled-control { opacity: 0.3; pointer-events: none; }
+    .xray-bg {
+      background: radial-gradient(circle at 50% 40%, #1e293b 0%, #0f172a 60%, #030712 100%);
+    }
+  </style>
+</head>
+<body class="p-3 max-w-7xl mx-auto flex flex-col gap-3 min-h-screen">
+
+  <header class="flex flex-wrap justify-between items-center panel px-4 py-2.5 gap-2">
+    <div class="flex items-center gap-3">
+      <h1 class="text-base md:text-lg font-bold text-sky-400">人工呼吸器 波形・3D解剖動態シミュレーター</h1>
+      <span id="phase-badge" class="px-2.5 py-0.5 text-xs font-bold rounded bg-slate-700 text-slate-300">呼気相</span>
+      <span id="trigger-badge" class="px-2.5 py-0.5 text-xs font-bold rounded bg-slate-800 text-slate-500 transition-colors">トリガー待機</span>
+    </div>
+    <div class="flex flex-wrap gap-1.5 text-xs">
+      <button onclick="applyPreset('normal_pcv')" class="px-2.5 py-1.5 bg-sky-950 hover:bg-sky-800 text-sky-200 rounded border border-sky-700 transition">1: 正常 (A/C-PCV)</button>
+      <button onclick="applyPreset('vcv_plateau')" class="px-2.5 py-1.5 bg-emerald-950 hover:bg-emerald-800 text-emerald-200 rounded border border-emerald-700 transition">2: プラトー圧 (VCV+Pause)</button>
+      <button onclick="applyPreset('autopeep_mistrig')" class="px-2.5 py-1.5 bg-rose-950 hover:bg-rose-800 text-rose-200 rounded border border-rose-700 transition">3: Auto-PEEP & ミストリガー</button>
+      <button onclick="togglePauseSim()" id="pause-btn" class="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white font-bold rounded transition">一時停止</button>
+    </div>
+  </header>
+
+  <div class="grid grid-cols-1 lg:grid-cols-12 gap-3 flex-grow">
+    <!-- 3D胸部解剖・動態モデル（Three.js WebGL） -->
+    <div class="lg:col-span-5 panel p-3 flex flex-col justify-between items-center relative">
+      <div class="w-full flex flex-wrap justify-between items-center border-b border-slate-700 pb-1.5 mb-1 gap-1">
+        <div class="flex items-center gap-2">
+          <span class="text-sm font-bold text-slate-200">3D胸部解剖・横隔膜動態</span>
+          <span class="text-[10px] px-1.5 py-0.5 rounded bg-sky-950 text-sky-300 border border-sky-800">マウスで360°回転・ズーム</span>
+        </div>
+        <span class="text-[11px] text-rose-400 flex items-center gap-1">
+          <span class="inline-block w-2 h-2 rounded-full bg-rose-500 animate-ping"></span>HR 75 bpm
+        </span>
+      </div>
+
+      <!-- 3D WebGL ビューア領域 -->
+      <div class="relative w-full h-[320px] flex justify-center items-center my-auto xray-bg rounded border border-sky-900/60 overflow-hidden shadow-inner">
+        <div id="anatomy-3d-container" class="w-full h-full cursor-grab active:cursor-grabbing"></div>
+
+        <!-- 視点切り替えオーバーレイボタン -->
+        <div class="absolute top-2 left-2 flex flex-wrap gap-1 z-10">
+          <button onclick="setAnatomyView('front')" class="px-2 py-0.5 text-[10px] bg-slate-900/80 hover:bg-sky-900 text-sky-200 rounded border border-sky-700/60 backdrop-blur">正面</button>
+          <button onclick="setAnatomyView('oblique')" class="px-2 py-0.5 text-[10px] bg-slate-900/80 hover:bg-sky-900 text-sky-200 rounded border border-sky-700/60 backdrop-blur">斜め立体</button>
+          <button onclick="setAnatomyView('side')" class="px-2 py-0.5 text-[10px] bg-slate-900/80 hover:bg-sky-900 text-sky-200 rounded border border-sky-700/60 backdrop-blur">側面</button>
+          <button onclick="setAnatomyView('diaphragm')" class="px-2 py-0.5 text-[10px] bg-slate-900/80 hover:bg-rose-900 text-rose-200 rounded border border-rose-700/60 backdrop-blur">横隔膜ドーム</button>
+        </div>
+
+        <div class="absolute top-2 right-2 z-10">
+          <button id="btn-toggle-heart" onclick="toggleHeart3D()" class="px-2 py-0.5 text-[10px] bg-rose-900/80 hover:bg-rose-800 text-rose-200 rounded border border-rose-700/60 backdrop-blur">心臓: ON</button>
+        </div>
+
+        <!-- 凡例ラベル -->
+        <div class="absolute bottom-2 left-2.5 flex gap-2.5 text-[10px] text-slate-300/90 bg-slate-950/75 px-2 py-0.5 rounded border border-slate-800/80 backdrop-blur pointer-events-none">
+          <span class="text-pink-300">● 肺実質 (ホログラム透過)</span>
+          <span class="text-cyan-300">● 肺胞点群 (Palv色温度連動)</span>
+          <span class="text-rose-400">● 横隔膜 (尾側変形)</span>
+          <span class="text-slate-400">● X線肋骨</span>
+        </div>
+
+        <!-- ミストリガー警告アラートバッジ -->
+        <div id="mistrigger-alert" class="hidden absolute bottom-8 bg-rose-600/95 text-white text-xs font-bold px-3 py-1.5 rounded-full shadow-lg border border-rose-300 animate-bounce z-20">
+          ⚠ ミストリガー発生！(Auto-PEEPにより横隔膜の陰圧が空振り)
+        </div>
+      </div>
+
+      <!-- 実測値モニター -->
+      <div class="w-full grid grid-cols-4 gap-2 bg-slate-900 p-2.5 rounded border border-slate-800 text-center mt-1">
+        <div>
+          <div class="text-[11px] text-slate-400">Ppeak</div>
+          <div id="val-ppeak" class="text-lg font-bold text-amber-400">0</div>
+          <div class="text-[10px] text-slate-500">cmH2O</div>
+        </div>
+        <div>
+          <div class="text-[11px] text-slate-400">Pplat</div>
+          <div id="val-pplat" class="text-lg font-bold text-amber-200">-</div>
+          <div class="text-[10px] text-slate-500">cmH2O</div>
+        </div>
+        <div>
+          <div class="text-[11px] text-slate-400">Vte</div>
+          <div id="val-vte" class="text-lg font-bold text-emerald-400">0</div>
+          <div class="text-[10px] text-slate-500">mL</div>
+        </div>
+        <div>
+          <div class="text-[11px] text-slate-400">Auto-PEEP</div>
+          <div id="val-autopeep" class="text-lg font-bold text-rose-400">0.0</div>
+          <div class="text-[10px] text-slate-500">cmH2O</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 波形Canvas -->
+    <div class="lg:col-span-7 panel p-3 flex flex-col justify-between">
+      <div class="flex flex-wrap justify-between items-center border-b border-slate-700 pb-1.5 mb-2 gap-2">
+        <div class="flex gap-4 text-xs font-bold">
+          <span class="text-amber-400">■ 気道内圧 Paw (cmH2O)</span>
+          <span class="text-sky-400">■ フロー Flow (L/min)</span>
+          <span class="text-emerald-400">■ 換気量 Volume (mL)</span>
+        </div>
+        <span class="text-[11px] text-slate-400">点線: Palv</span>
+      </div>
+      <div class="relative w-full h-[380px] bg-slate-950 rounded border border-slate-800 overflow-hidden shadow-inner">
+        <canvas id="wave-canvas" class="w-full h-full block"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- 下部操作パネル -->
+  <div class="grid grid-cols-1 md:grid-cols-12 gap-3">
+    <div class="md:col-span-8 panel p-3">
+      <div class="flex flex-wrap justify-between items-center border-b border-slate-700 pb-2 mb-2.5 gap-2">
+        <span class="text-sm font-bold text-sky-400">人工呼吸器 設定パラメータ</span>
+        <div class="flex flex-wrap gap-2 items-center text-xs">
+          <div class="flex bg-slate-900 p-0.5 rounded border border-slate-700">
+            <label class="px-2.5 py-1 rounded cursor-pointer has-[:checked]:bg-sky-600 has-[:checked]:text-white font-bold">
+              <input type="radio" name="mode" value="AC" checked class="hidden"> A/C
+            </label>
+            <label class="px-2.5 py-1 rounded cursor-pointer has-[:checked]:bg-sky-600 has-[:checked]:text-white font-bold">
+              <input type="radio" name="mode" value="SIMV" class="hidden"> SIMV
+            </label>
+            <label class="px-2.5 py-1 rounded cursor-pointer has-[:checked]:bg-sky-600 has-[:checked]:text-white font-bold">
+              <input type="radio" name="mode" value="PSV" class="hidden"> PSV
+            </label>
+          </div>
+          <div id="ctrl-type-group" class="flex bg-slate-900 p-0.5 rounded border border-slate-700">
+            <label class="px-2.5 py-1 rounded cursor-pointer has-[:checked]:bg-indigo-600 has-[:checked]:text-white font-bold">
+              <input type="radio" name="ctrlType" value="PCV" checked class="hidden"> PCV (従圧式)
+            </label>
+            <label class="px-2.5 py-1 rounded cursor-pointer has-[:checked]:bg-indigo-600 has-[:checked]:text-white font-bold">
+              <input type="radio" name="ctrlType" value="VCV" class="hidden"> VCV (従量式)
+            </label>
+          </div>
+          <div id="flow-pat-group" class="flex bg-slate-900 p-0.5 rounded border border-slate-700 disabled-control">
+            <label class="px-2 py-1 rounded cursor-pointer has-[:checked]:bg-teal-600 has-[:checked]:text-white font-bold">
+              <input type="radio" name="flowPat" value="SQUARE" checked class="hidden"> 矩形波
+            </label>
+            <label class="px-2 py-1 rounded cursor-pointer has-[:checked]:bg-teal-600 has-[:checked]:text-white font-bold">
+              <input type="radio" name="flowPat" value="DECEL" class="hidden"> 漸減波
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-3.5 text-xs">
+        <div id="wrap-rr">
+          <div class="flex justify-between mb-1"><span class="text-slate-300">呼吸回数 (RR)</span><span id="lbl-rr" class="font-bold text-sky-300">12 /分</span></div>
+          <input type="range" id="sl-rr" min="6" max="35" step="1" value="12" class="w-full">
+        </div>
+        <div id="wrap-ti">
+          <div class="flex justify-between mb-1"><span class="text-slate-300">吸気時間 (Ti)</span><span id="lbl-ti" class="font-bold text-sky-300">1.0 秒</span></div>
+          <input type="range" id="sl-ti" min="0.5" max="2.5" step="0.1" value="1.0" class="w-full">
+        </div>
+        <div id="wrap-pc">
+          <div class="flex justify-between mb-1"><span class="text-slate-300">吸気圧 (PC)</span><span id="lbl-pc" class="font-bold text-sky-300">+15 cmH2O</span></div>
+          <input type="range" id="sl-pc" min="5" max="30" step="1" value="15" class="w-full">
+        </div>
+        <div id="wrap-vt" class="disabled-control">
+          <div class="flex justify-between mb-1"><span class="text-slate-300">1回換気量 (Vt)</span><span id="lbl-vt" class="font-bold text-sky-300">450 mL</span></div>
+          <input type="range" id="sl-vt" min="250" max="700" step="10" value="450" class="w-full">
+        </div>
+        <div id="wrap-tpause" class="disabled-control">
+          <div class="flex justify-between mb-1"><span class="text-slate-300">ポーズ (Tpause)</span><span id="lbl-tpause" class="font-bold text-sky-300">0.0 秒</span></div>
+          <input type="range" id="sl-tpause" min="0.0" max="0.6" step="0.1" value="0.0" class="w-full">
+        </div>
+        <div id="wrap-ps">
+          <div class="flex justify-between mb-1"><span class="text-slate-300">サポート圧 (PS)</span><span id="lbl-ps" class="font-bold text-sky-300">+12 cmH2O</span></div>
+          <input type="range" id="sl-ps" min="0" max="25" step="1" value="12" class="w-full">
+        </div>
+        <div>
+          <div class="flex justify-between mb-1"><span class="text-slate-300">PEEP</span><span id="lbl-peep" class="font-bold text-sky-300">5 cmH2O</span></div>
+          <input type="range" id="sl-peep" min="0" max="20" step="1" value="5" class="w-full">
+        </div>
+        <div>
+          <div class="flex justify-between mb-1"><span class="text-slate-300">トリガー感度</span><span id="lbl-trig" class="font-bold text-sky-300">-2.0 cmH2O</span></div>
+          <input type="range" id="sl-trig" min="0.5" max="5.0" step="0.5" value="2.0" class="w-full">
+        </div>
+      </div>
+    </div>
+
+    <div class="md:col-span-4 panel p-3">
+      <div class="border-b border-slate-700 pb-2 mb-2.5">
+        <span class="text-sm font-bold text-rose-400">患者側パラメータ</span>
+      </div>
+      <div class="grid grid-cols-2 gap-3.5 text-xs">
+        <div>
+          <div class="flex justify-between mb-1"><span class="text-slate-300">自発呼吸数</span><span id="lbl-spont-rr" class="font-bold text-rose-300">0 /分</span></div>
+          <input type="range" id="sl-spont-rr" min="0" max="35" step="1" value="0" class="w-full">
+        </div>
+        <div>
+          <div class="flex justify-between mb-1"><span class="text-slate-300">吸気努力 (Pmus)</span><span id="lbl-pmus" class="font-bold text-rose-300">6 cmH2O</span></div>
+          <input type="range" id="sl-pmus" min="2" max="15" step="1" value="6" class="w-full">
+        </div>
+        <div>
+          <div class="flex justify-between mb-1"><span class="text-slate-300">コンプライアンス (C)</span><span id="lbl-comp" class="font-bold text-rose-300">50 mL/cmH2O</span></div>
+          <input type="range" id="sl-comp" min="20" max="80" step="5" value="50" class="w-full">
+        </div>
+        <div>
+          <div class="flex justify-between mb-1"><span class="text-slate-300">気道抵抗 (R)</span><span id="lbl-res" class="font-bold text-rose-300">10 cmH2O/L/s</span></div>
+          <input type="range" id="sl-res" min="5" max="30" step="5" value="10" class="w-full">
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>
