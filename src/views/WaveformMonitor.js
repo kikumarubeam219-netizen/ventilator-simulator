@@ -5,11 +5,27 @@ export class WaveformMonitor {
     this.maxHistory = maxHistory;
     this.history = [];
 
+    // 比較用フリーズ（リファレンス）波形データ
+    this.freezeHistory = null;
+    this.isFrozenOverlay = false;
+
+    // カーソル計測用
+    this.cursorX = null;
+
     this.padL = 44;
     this.padR = 54;
 
     this.resize();
     window.addEventListener('resize', () => this.resize());
+
+    // マウスカーソル計測イベント
+    this.canvas.addEventListener('mousemove', (e) => {
+      const rect = this.canvas.getBoundingClientRect();
+      this.cursorX = e.clientX - rect.left;
+    });
+    this.canvas.addEventListener('mouseleave', () => {
+      this.cursorX = null;
+    });
   }
 
   resize() {
@@ -18,10 +34,30 @@ export class WaveformMonitor {
   }
 
   pushSample(sample) {
-    this.history.push(sample);
+    this.history.push({ ...sample });
     if (this.history.length > this.maxHistory) {
       this.history.shift();
     }
+  }
+
+  /**
+   * 現在の波形をフリーズ・基準波形（リファレンス）として固定保存
+   */
+  freezeCurrentWaveform() {
+    if (this.history.length > 5) {
+      this.freezeHistory = this.history.map(s => ({ ...s }));
+      this.isFrozenOverlay = true;
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * フリーズ比較波形の解除
+   */
+  clearFrozenWaveform() {
+    this.freezeHistory = null;
+    this.isFrozenOverlay = false;
   }
 
   render(peepSetting) {
@@ -90,10 +126,66 @@ export class WaveformMonitor {
     ctx.moveTo(this.padL, volTop); ctx.lineTo(this.padL, volBot);
     ctx.stroke();
 
-    if (this.history.length < 2) return;
     const stepX = plotW / this.maxHistory;
 
-    // 2. 波形プロット
+    // 2. 比較用フリーズ（リファレンス）波形のオーバーレイ描画
+    if (this.freezeHistory && this.freezeHistory.length > 1) {
+      const fLen = this.freezeHistory.length;
+
+      // フリーズ波形：半透明破線（淡いゴーストライン）
+      ctx.save();
+      ctx.setLineDash([4, 3]);
+
+      // Freeze Paw
+      ctx.strokeStyle = 'rgba(251, 191, 36, 0.40)';
+      ctx.lineWidth = 1.8;
+      ctx.beginPath();
+      for (let i = 0; i < fLen; i++) {
+        const x = this.padL + i * stepX;
+        const y = pawY(this.freezeHistory[i].paw);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+
+      // Freeze Flow
+      ctx.strokeStyle = 'rgba(56, 189, 248, 0.40)';
+      ctx.lineWidth = 1.8;
+      ctx.beginPath();
+      for (let i = 0; i < fLen; i++) {
+        const x = this.padL + i * stepX;
+        const y = flowY(this.freezeHistory[i].flow);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+
+      // Freeze Volume
+      ctx.strokeStyle = 'rgba(52, 211, 153, 0.40)';
+      ctx.lineWidth = 1.8;
+      ctx.beginPath();
+      for (let i = 0; i < fLen; i++) {
+        const x = this.padL + i * stepX;
+        const y = volY(this.freezeHistory[i].vol);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+
+      ctx.restore();
+
+      // フリーズ固定中のインジケーターバッジ
+      ctx.fillStyle = 'rgba(56, 189, 248, 0.2)';
+      ctx.strokeStyle = '#38bdf8';
+      ctx.lineWidth = 1;
+      ctx.fillRect(w - this.padR - 110, 6, 105, 18);
+      ctx.strokeRect(w - this.padR - 110, 6, 105, 18);
+      ctx.fillStyle = '#e0f2fe';
+      ctx.font = 'bold 9px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('❄ 基準波形 比較中', w - this.padR - 57, 15);
+    }
+
+    // 3. リアルタイム波形プロット
+    if (this.history.length < 2) return;
+
     // Palv 点線
     ctx.strokeStyle = 'rgba(251, 191, 36, 0.45)';
     ctx.lineWidth = 1.5;
@@ -140,12 +232,59 @@ export class WaveformMonitor {
     }
     ctx.stroke();
 
-    // 3. 右端現在値バッジ
+    // 4. 右端現在値バッジ
     const last = this.history[this.history.length - 1];
     const lastX = this.padL + (this.history.length - 1) * stepX;
     this.drawTag(lastX, pawY(last.paw), last.paw.toFixed(1), '#fbbf24');
     this.drawTag(lastX, flowY(last.flow), Math.round(last.flow), '#38bdf8');
     this.drawTag(lastX, volY(last.vol), Math.round(last.vol), '#34d399');
+
+    // 5. マウスホバー位置での縦線計測カーソル ＆ 数値・差分（Δ）ツールチップ
+    if (this.cursorX !== null && this.cursorX >= this.padL && this.cursorX <= w - this.padR) {
+      const index = Math.round((this.cursorX - this.padL) / stepX);
+      const curSample = this.history[index];
+
+      if (curSample) {
+        // 縦線カーソル
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.6)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([2, 2]);
+        ctx.beginPath();
+        ctx.moveTo(this.cursorX, 10);
+        ctx.lineTo(this.cursorX, h - 10);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // カーソル位置の測定ツールチップ
+        const fSample = (this.freezeHistory && this.freezeHistory[index]) ? this.freezeHistory[index] : null;
+
+        let tipText = `Paw: ${curSample.paw.toFixed(1)} | Flow: ${Math.round(curSample.flow)} | Vol: ${Math.round(curSample.vol)}`;
+        if (fSample) {
+          const dPaw = (curSample.paw - fSample.paw).toFixed(1);
+          const dPawSign = curSample.paw >= fSample.paw ? `+${dPaw}` : dPaw;
+          const dVol = Math.round(curSample.vol - fSample.vol);
+          const dVolSign = curSample.vol >= fSample.vol ? `+${dVol}` : dVol;
+          tipText += ` (基準比 ΔPaw:${dPawSign}, ΔVol:${dVolSign})`;
+        }
+
+        ctx.font = 'bold 9.5px sans-serif';
+        const textW = ctx.measureText(tipText).width + 16;
+        let boxX = this.cursorX - textW / 2;
+        if (boxX < this.padL) boxX = this.padL;
+        if (boxX + textW > w - this.padR) boxX = w - this.padR - textW;
+
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.92)';
+        ctx.strokeStyle = '#94a3b8';
+        ctx.lineWidth = 1;
+        ctx.fillRect(boxX, h - 22, textW, 18);
+        ctx.strokeRect(boxX, h - 22, textW, 18);
+
+        ctx.fillStyle = '#f8fafc';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(tipText, boxX + textW / 2, h - 13);
+      }
+    }
   }
 
   drawTag(x, y, text, color) {

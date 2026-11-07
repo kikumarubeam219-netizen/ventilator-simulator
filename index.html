@@ -111,15 +111,27 @@
     <!-- 波形Canvas -->
     <div class="lg:col-span-7 panel p-3 flex flex-col justify-between">
       <div class="flex flex-wrap justify-between items-center border-b border-slate-700 pb-1.5 mb-2 gap-2">
-        <div class="flex gap-4 text-xs font-bold">
+        <div class="flex flex-wrap gap-3 text-xs font-bold items-center">
           <span class="text-amber-400">■ 気道内圧 Paw (cmH2O)</span>
           <span class="text-sky-400">■ フロー Flow (L/min)</span>
           <span class="text-emerald-400">■ 換気量 Volume (mL)</span>
+          <span class="text-[11px] text-slate-400 font-normal">点線: Palv</span>
         </div>
-        <span class="text-[11px] text-slate-400">点線: Palv</span>
+        <div class="flex items-center gap-1.5">
+          <button id="btn-freeze" onclick="freezeWaveform()" class="px-2.5 py-1 text-xs font-bold bg-slate-800 hover:bg-sky-900 text-sky-300 rounded border border-sky-700/60 transition flex items-center gap-1" title="現在の波形を基準として固定し、パラメータ変更後の波形と重ねて比較できます">
+            <span>❄</span> 基準波形として固定 (比較)
+          </button>
+          <button id="btn-clear-freeze" onclick="clearFreezeWaveform()" class="hidden px-2 py-1 text-xs font-bold bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white rounded border border-slate-700 transition" title="固定した基準波形を解除">
+            ✕ 解除
+          </button>
+        </div>
       </div>
       <div class="relative w-full h-[380px] bg-slate-950 rounded border border-slate-800 overflow-hidden shadow-inner">
-        <canvas id="wave-canvas" class="w-full h-full block"></canvas>
+        <canvas id="wave-canvas" class="w-full h-full block cursor-crosshair"></canvas>
+      </div>
+      <div class="flex justify-between items-center text-[10px] text-slate-400 mt-1 px-1">
+        <span>💡 波形上にマウスを乗せると、計測カーソルと基準波形との差分 (ΔPaw, ΔVol) が表示されます</span>
+        <span class="text-slate-500">破線: 基準固定波形</span>
       </div>
     </div>
   </div>

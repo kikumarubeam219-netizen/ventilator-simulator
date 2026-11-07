@@ -26,6 +26,29 @@ window.toggleHeart3D = () => {
   }
 };
 
+// 波形フリーズ比較機能
+window.freezeWaveform = () => {
+  const success = monitor.freezeCurrentWaveform();
+  const btnFreeze = document.getElementById('btn-freeze');
+  const btnClear = document.getElementById('btn-clear-freeze');
+  if (success && btnFreeze && btnClear) {
+    btnFreeze.classList.add('bg-sky-600', 'text-white');
+    btnFreeze.classList.remove('bg-slate-800', 'text-sky-300');
+    btnClear.classList.remove('hidden');
+  }
+};
+
+window.clearFreezeWaveform = () => {
+  monitor.clearFrozenWaveform();
+  const btnFreeze = document.getElementById('btn-freeze');
+  const btnClear = document.getElementById('btn-clear-freeze');
+  if (btnFreeze && btnClear) {
+    btnFreeze.classList.remove('bg-sky-600', 'text-white');
+    btnFreeze.classList.add('bg-slate-800', 'text-sky-300');
+    btnClear.classList.add('hidden');
+  }
+};
+
 // コールバック接続
 engine.onMistrigger = () => {
   const alertEl = document.getElementById('mistrigger-alert');
