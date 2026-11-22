@@ -35,9 +35,11 @@ export class AtlasAnatomyRenderer {
     this.loaded = false;
     this.loadError = null;
 
-    // 肺病変クリッピング合成用の再利用オフスクリーン Canvas
+    // 肺病変・心臓オーバーレイのクリッピング合成用の再利用オフスクリーン Canvas
     this.lungWorkCanvas = document.createElement('canvas');
     this.lungWorkCtx = this.lungWorkCanvas.getContext('2d');
+    this.heartWorkCanvas = document.createElement('canvas');
+    this.heartWorkCtx = this.heartWorkCanvas.getContext('2d');
 
     // 表示・個別制御状態
     this.showHeart = true;
@@ -52,6 +54,7 @@ export class AtlasAnatomyRenderer {
     this.smoothPalv = 5;
     this.smoothPmus = 0;
     this.smoothFlow = 0;
+    this.smoothEffusionPush = 0;
 
     // 心拍位相（ラジアン・サイクル管理）
     this.heartPhase = 0;
@@ -350,24 +353,24 @@ export class AtlasAnatomyRenderer {
       wctx.fillRect(0, 0, w, h);
     }
 
-    // 2. 肺水腫（下肺野から肺門部へ広がる白濁グラデーション：PEEP上昇で薄まる）
+    // 2. 肺水腫（下肺野から肺門部へ広がる白濁グラデーション：PEEP上昇で明確に薄まる）
     if (effectiveEdema > 0.005) {
-      const alphaEdema = Math.min(0.76, 0.14 + 0.58 * effectiveEdema + (ardsMode ? 0.08 : 0));
+      const alphaEdema = Math.min(0.80, Math.pow(effectiveEdema, 1.15) * 0.82 + (ardsMode ? 0.08 : 0));
       // 肺門寄りの中心座標（右肺は右側が肺門、左肺は左側が肺門）
       const hilumX = side === 'right' ? w * 0.78 : w * 0.22;
       const hilumY = h * 0.58;
-      const rad = Math.max(w, h) * (0.42 + 0.28 * effectiveEdema);
+      const rad = Math.max(w, h) * (0.28 + 0.42 * effectiveEdema);
 
       const edemaRad = wctx.createRadialGradient(hilumX, hilumY, rad * 0.08, hilumX, hilumY, rad);
       edemaRad.addColorStop(0.0, `rgba(241, 245, 249, ${alphaEdema.toFixed(3)})`);
-      edemaRad.addColorStop(0.5, `rgba(219, 234, 254, ${(alphaEdema * 0.68).toFixed(3)})`);
+      edemaRad.addColorStop(0.5, `rgba(219, 234, 254, ${(alphaEdema * 0.62).toFixed(3)})`);
       edemaRad.addColorStop(1.0, 'rgba(219, 234, 254, 0)');
       wctx.fillStyle = edemaRad;
       wctx.fillRect(0, 0, w, h);
 
       // 下肺野の重力性浸潤（白濁）
-      const baseGrad = wctx.createLinearGradient(0, h * 0.96, 0, h * (0.72 - 0.35 * effectiveEdema));
-      baseGrad.addColorStop(0.0, `rgba(235, 244, 255, ${(alphaEdema * 0.88).toFixed(3)})`);
+      const baseGrad = wctx.createLinearGradient(0, h * 0.96, 0, h * (0.80 - 0.45 * effectiveEdema));
+      baseGrad.addColorStop(0.0, `rgba(235, 244, 255, ${(alphaEdema * 0.85).toFixed(3)})`);
       baseGrad.addColorStop(1.0, 'rgba(235, 244, 255, 0)');
       wctx.fillStyle = baseGrad;
       wctx.fillRect(0, 0, w, h);
@@ -530,31 +533,140 @@ export class AtlasAnatomyRenderer {
   }
 
   /**
-   * 胸水オーバーレイ描画（胸郭と肺の間にメニスカス曲線付きの半透明液体レイヤー）
+   * 心臓パーツに CS1心不全（赤み過負荷）または右心不全（前負荷低下）オーバーレイを輪郭内クリッピング合成して描画
    */
-  _drawPleuralEffusion(effusionRatio, diaphShiftY, isFrontTint = false) {
+  _drawHeartWithOverlay(partCanvas, cfg, offsetX, offsetY, scaleX, scaleY, cs1Overload, rhfCompression) {
+    if (!partCanvas) return;
+
+    if (cs1Overload <= 0.01 && rhfCompression <= 0.01) {
+      this._drawPart(partCanvas, cfg, offsetX, offsetY, scaleX, scaleY);
+      return;
+    }
+
+    const w = partCanvas.width;
+    const h = partCanvas.height;
+    if (this.heartWorkCanvas.width !== w || this.heartWorkCanvas.height !== h) {
+      this.heartWorkCanvas.width = w;
+      this.heartWorkCanvas.height = h;
+    }
+
+    const hctx = this.heartWorkCtx;
+    hctx.clearRect(0, 0, w, h);
+    hctx.globalCompositeOperation = 'source-over';
+    hctx.drawImage(partCanvas, 0, 0);
+
+    hctx.globalCompositeOperation = 'source-atop';
+
+    // CS1心不全：低PEEP時のうっ血・後負荷増大による赤みオーバーレイ
+    if (cs1Overload > 0.01) {
+      const redAlpha = Math.min(0.42, cs1Overload * 0.40);
+      const grad = hctx.createRadialGradient(w * 0.5, h * 0.58, w * 0.08, w * 0.5, h * 0.58, w * 0.62);
+      grad.addColorStop(0, `rgba(239, 68, 68, ${redAlpha.toFixed(3)})`);
+      grad.addColorStop(1, `rgba(185, 28, 28, ${(redAlpha * 0.55).toFixed(3)})`);
+      hctx.fillStyle = grad;
+      hctx.fillRect(0, 0, w, h);
+    }
+
+    // 右心不全/前負荷低下：高PEEP時の虚脱・うっ血低下による淡い青白い陰影
+    if (rhfCompression > 0.01) {
+      const paleAlpha = Math.min(0.28, rhfCompression * 0.26);
+      hctx.fillStyle = `rgba(147, 197, 253, ${paleAlpha.toFixed(3)})`;
+      hctx.fillRect(0, 0, w, h);
+    }
+
+    hctx.globalCompositeOperation = 'source-over';
+    this._drawPart(this.heartWorkCanvas, cfg, offsetX, offsetY, scaleX, scaleY);
+  }
+
+  /**
+   * 右心不全/前負荷低下 ON時：心臓の左右から中心へ向かって押し込む淡い青白い圧迫エフェクト（グラデーション＋内向き矢印）
+   */
+  _drawHeartCompressionEffect(cx, cy, intensity) {
+    if (intensity <= 0.05) return;
+    const ctx = this.ctx;
+    ctx.save();
+
+    // 左右から心臓を挟み込む淡い青白い圧迫グラデーション
+    const drawSideGlow = (dir) => {
+      const xStart = cx + dir * 78;
+      const xEnd = cx + dir * 24;
+      const grad = ctx.createLinearGradient(xStart, cy, xEnd, cy);
+      grad.addColorStop(0, 'rgba(125, 211, 252, 0)');
+      grad.addColorStop(0.55, `rgba(125, 211, 252, ${(0.28 * intensity).toFixed(3)})`);
+      grad.addColorStop(1, `rgba(186, 230, 253, ${(0.08 * intensity).toFixed(3)})`);
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.ellipse(cx + dir * 50, cy, 28, 58, 0, 0, Math.PI * 2);
+      ctx.fill();
+    };
+    drawSideGlow(-1);
+    drawSideGlow(1);
+
+    // 左右から中心へ向かう内向き圧迫矢印（上下3対）
+    const drawInwardArrow = (x, y, dir) => {
+      const len = 14 + intensity * 6;
+      ctx.strokeStyle = `rgba(186, 230, 253, ${(0.45 + 0.45 * intensity).toFixed(3)})`;
+      ctx.fillStyle = `rgba(186, 230, 253, ${(0.45 + 0.45 * intensity).toFixed(3)})`;
+      ctx.lineWidth = 2.0;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(x - dir * len, y);
+      ctx.lineTo(x, y);
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.moveTo(x + dir * 3, y);
+      ctx.lineTo(x - dir * 4, y - 4);
+      ctx.lineTo(x - dir * 4, y + 4);
+      ctx.closePath();
+      ctx.fill();
+    };
+
+    [-32, 0, 32].forEach((dy) => {
+      drawInwardArrow(cx - 52, cy + dy, 1);
+      drawInwardArrow(cx + 52, cy + dy, -1);
+    });
+
+    ctx.restore();
+  }
+
+  /**
+   * 胸水オーバーレイ描画（胸郭と肺の間にメニスカス曲線付きの半透明液体レイヤー）
+   * - 透明度（濃さ）は PEEP を上げても薄めず effusionRatio のみで維持
+   * - effusionPushRatio (PEEP・吸気Paw) に応じて内側(肺側)が押し込まれ、
+   *   外側(胸壁側)のメニスカスが上方へせり上がり、吸気呼気に合わせて液面がわずかに波打つ
+   */
+  _drawPleuralEffusion(effusionRatio, pushRatio, diaphShiftY, nowMs, isFrontTint = false) {
     if (effusionRatio <= 0.005) return;
     const ctx = this.ctx;
-    const baseBottom = 362 + diaphShiftY * 0.5;
-    const maxHeight = 135;
+    const baseBottom = 362 + diaphShiftY * 0.62;
+    const maxHeight = 132;
     const fluidH = maxHeight * effusionRatio;
-    const topInnerY = baseBottom - fluidH;
-    // 外側（肋骨横隔膜角側）がやや高く反り上がるメニスカス曲線
-    const meniscusLift = 14 + 20 * effusionRatio;
+
+    // 吸気・呼気に連動した微細な液面の波打ち
+    const wave = Math.sin(nowMs * 0.0055) * (1.2 + pushRatio * 2.4);
+
+    // 肺の再拡張により胸水の内側(肺底側)は押し込まれ、外側(胸壁・肋骨側)のメニスカスが上方へせり上がる
+    const innerPushDown = pushRatio * 15 * effusionRatio;
+    const topInnerY = baseBottom - fluidH + innerPushDown + wave * 0.6;
+    const meniscusLift = (14 + 20 * effusionRatio) + pushRatio * (14 + 22 * effusionRatio);
 
     const drawSideFluid = (isRightLung) => {
       // 画面左側＝右胸腔、画面右側＝左胸腔
       const outerX = isRightLung ? 108 : 392;
       const innerX = isRightLung ? 236 : 264;
-      const ctrlX = isRightLung ? 155 : 345;
-      const ctrlY = topInnerY + 6;
-      const topOuterY = topInnerY - meniscusLift;
+      // 押し返し時は胸水が胸壁寄りの狭い隙間へ押しやられるよう制御点を外側・下方へシフト
+      const ctrlX = isRightLung
+        ? (156 - pushRatio * 18)
+        : (344 + pushRatio * 18);
+      const ctrlY = topInnerY + 7 + pushRatio * 10 - wave;
+      const topOuterY = Math.max(130, topInnerY - meniscusLift + wave * 0.8);
 
       ctx.save();
       ctx.beginPath();
       ctx.moveTo(innerX, baseBottom);
       ctx.lineTo(innerX, topInnerY);
-      // 内側から外側へメニスカス曲線
+      // 内側から外側へメニスカス曲線（高PEEP/高Paw時は外側がより高くせり上がる）
       ctx.quadraticCurveTo(ctrlX, ctrlY, outerX, topOuterY);
       // 胸壁（肋骨内側）に沿って下端へ丸く戻る
       ctx.quadraticCurveTo(
@@ -566,18 +678,17 @@ export class AtlasAnatomyRenderer {
       ctx.lineTo(innerX, baseBottom);
       ctx.closePath();
 
+      // 胸水の透明度（濃さ）は PEEP を上げても薄めず effusionRatio で一定維持
       const grad = ctx.createLinearGradient(0, topOuterY, 0, baseBottom);
       if (isFrontTint) {
-        // 肺の前面にうっすら重ねる浸漬ハイライト
         const a = 0.14 + 0.16 * effusionRatio;
-        grad.addColorStop(0, `rgba(210, 232, 238, ${(a * 0.7).toFixed(3)})`);
+        grad.addColorStop(0, `rgba(210, 232, 238, ${(a * 0.72).toFixed(3)})`);
         grad.addColorStop(1, `rgba(218, 214, 168, ${a.toFixed(3)})`);
       } else {
-        // 胸郭と肺の間の本体液体レイヤー（淡い黄色〜青白い漿液カラー）
-        const a = 0.28 + 0.34 * effusionRatio;
-        grad.addColorStop(0, `rgba(186, 226, 238, ${(a * 0.82).toFixed(3)})`);
+        const a = 0.30 + 0.34 * effusionRatio;
+        grad.addColorStop(0, `rgba(186, 226, 238, ${(a * 0.84).toFixed(3)})`);
         grad.addColorStop(0.55, `rgba(214, 224, 186, ${a.toFixed(3)})`);
-        grad.addColorStop(1, `rgba(210, 198, 138, ${Math.min(0.75, a * 1.15).toFixed(3)})`);
+        grad.addColorStop(1, `rgba(210, 198, 138, ${Math.min(0.76, a * 1.15).toFixed(3)})`);
       }
       ctx.fillStyle = grad;
       ctx.fill();
@@ -586,8 +697,8 @@ export class AtlasAnatomyRenderer {
       ctx.beginPath();
       ctx.moveTo(innerX, topInnerY);
       ctx.quadraticCurveTo(ctrlX, ctrlY, outerX, topOuterY);
-      ctx.strokeStyle = `rgba(226, 244, 250, ${(0.35 + 0.35 * effusionRatio).toFixed(3)})`;
-      ctx.lineWidth = isFrontTint ? 1.4 : 1.0;
+      ctx.strokeStyle = `rgba(226, 244, 250, ${(0.38 + 0.34 * effusionRatio).toFixed(3)})`;
+      ctx.lineWidth = isFrontTint ? 1.5 : 1.0;
       ctx.stroke();
       ctx.restore();
     };
@@ -736,8 +847,8 @@ export class AtlasAnatomyRenderer {
       return;
     }
 
-    // 1. 病態力学（実効 C/R および視覚パラメータ）の取得
-    const patho = engine.pathology || computePathologyMechanics(params);
+    // 1. 病態力学（実効 C/R および視覚パラメータ・胸水押し返し係数）の取得
+    const patho = engine.pathology || computePathologyMechanics(params, engine.Paw);
     // コンプライアンス低下による「硬くて膨らみにくい」視覚制限係数 (0.35〜1.0)
     const expandStiffness = 0.35 + 0.65 * patho.complianceRatio;
 
@@ -749,22 +860,27 @@ export class AtlasAnatomyRenderer {
     this.smoothPalv += (engine.Palv - this.smoothPalv) * lerp;
     this.smoothPmus += (engine.Pmus - this.smoothPmus) * lerp;
     this.smoothFlow += (engine.Flow * 60.0 - this.smoothFlow) * lerp;
+    this.smoothEffusionPush += ((patho.effusionPushRatio ?? 0) - this.smoothEffusionPush) * lerp;
 
     // 3. PEEP ＆ COPDエアトラッピングによる呼気終末ベースラインスケール
     const peepNorm = Math.max(0, Math.min(1, this.smoothPeep / 20.0));
     const autoPeepNorm = Math.max(0, Math.min(1, (engine.currentAutoPeep || 0) / 10.0));
     const copdTrapBoost = patho.airwayNarrowing ? (0.045 + autoPeepNorm * 0.065) : 0;
-    const collapseShrink = patho.effectiveAtel * 0.045 + patho.effusionRatio * 0.035;
+    const collapseShrink = patho.effectiveAtel * 0.045;
     const baseScale = 0.94 + peepNorm * 0.06 + copdTrapBoost - collapseShrink;
 
-    // 4. 換気量 (Volume) による左右肺の個別スケール計算（eff_C/base_C 連動の硬さ制限＋各病態補正）
+    // 胸水による下肺野の縦方向圧迫（低PEEPで強く制限、PEEP/Paw上昇で下方向へ再拡張）
+    const effusionScaleYCompress = patho.effusionRatio * 0.14 * (1.0 - this.smoothEffusionPush * 0.72);
+    const effusionScaleXCompress = patho.effusionRatio * 0.04 * (1.0 - this.smoothEffusionPush * 0.50);
+
+    // 4. 換気量 (Volume) による左右肺の個別スケール計算（eff_C/base_C 連動の硬さ制限＋胸水下肺野圧迫解除）
     const volNorm = Math.max(0, Math.min(1.6, this.smoothV / 600.0));
     const pawNorm = Math.max(0, Math.min(1, (this.smoothPaw - 5) / 30.0));
 
-    let rightScaleX = baseScale + volNorm * 0.11 * this.rightLungRatio * expandStiffness;
-    let rightScaleY = baseScale + volNorm * 0.14 * this.rightLungRatio * expandStiffness;
-    let leftScaleX = baseScale + volNorm * 0.11 * this.leftLungRatio * expandStiffness;
-    let leftScaleY = baseScale + volNorm * 0.14 * this.leftLungRatio * expandStiffness;
+    let rightScaleX = (baseScale - effusionScaleXCompress) + volNorm * 0.11 * this.rightLungRatio * expandStiffness;
+    let rightScaleY = (baseScale - effusionScaleYCompress) + volNorm * 0.14 * this.rightLungRatio * expandStiffness;
+    let leftScaleX = (baseScale - effusionScaleXCompress) + volNorm * 0.11 * this.leftLungRatio * expandStiffness;
+    let leftScaleY = (baseScale - effusionScaleYCompress) + volNorm * 0.14 * this.leftLungRatio * expandStiffness;
 
     // 緊張性気胸（右）ON時：右肺を肺門側へ大幅に虚脱縮小
     if (patho.pneumothoraxRight) {
@@ -780,20 +896,44 @@ export class AtlasAnatomyRenderer {
       leftScaleY = Math.max(0.84, baseScale - 0.08);
     }
 
-    // 5. 横隔膜の上下動（PEEP + 平均換気量 + 自発努力 Pmus + COPD低位平坦化に連動）
+    // 5. 横隔膜の上下動（PEEP + 平均換気量 + 自発努力 Pmus + COPD低位平坦化 + 胸水による下方偏位に連動）
     const avgRatio = (this.rightLungRatio + this.leftLungRatio) * 0.5;
     const pmusNorm = Math.max(0, Math.min(1, this.smoothPmus / 15.0));
     const copdDiaphDrop = patho.airwayNarrowing ? (10 + autoPeepNorm * 12) : 0;
     const copdDiaphFlat = patho.airwayNarrowing ? (0.07 + autoPeepNorm * 0.06) : 0;
-    const diaphShiftY = peepNorm * 6 + copdDiaphDrop + volNorm * 22 * avgRatio * expandStiffness + pmusNorm * 8;
-    const diaphScaleY = Math.max(0.76, 1.0 - copdDiaphFlat - volNorm * 0.10 * avgRatio * expandStiffness - pmusNorm * 0.05);
+    // 胸水による下方偏位：減らない胸水量 + PEEP/Paw上昇で「胸水＋膨らんだ肺」の両方に押し下げられる
+    const effusionDiaphDrop = patho.effusionRatio * (10 + this.smoothEffusionPush * 16);
+    const effusionDiaphFlat = patho.effusionRatio * (0.04 + this.smoothEffusionPush * 0.07);
+    const diaphShiftY = peepNorm * 6 + copdDiaphDrop + effusionDiaphDrop + volNorm * 22 * avgRatio * expandStiffness + pmusNorm * 8;
+    const diaphScaleY = Math.max(0.72, 1.0 - copdDiaphFlat - effusionDiaphFlat - volNorm * 0.10 * avgRatio * expandStiffness - pmusNorm * 0.05);
 
-    // 6. 心拍数 (HR) に同期した 2 峰性拍動（ドクドク）＋ 緊張性気胸による縦隔左方偏位
+    // 6. 心拍数 (HR) に同期した 2 峰性拍動（ドクドク）＋ 心肺相互作用（胸腔内圧圧迫・CS1過負荷・右心不全虚脱）
     const hr = params.hr || 75;
     this.heartPhase = (this.heartPhase + (hr / 60.0) * dtSec) % 1.0;
     const beat1 = Math.exp(-Math.pow((this.heartPhase - 0.12) / 0.065, 2));
     const beat2 = 0.42 * Math.exp(-Math.pow((this.heartPhase - 0.30) / 0.055, 2));
-    const heartScale = 1.0 + (beat1 + beat2) * 0.048;
+
+    // 全モード共通：PEEP と気道内圧 (Paw) の上昇に反比例して心臓ベーススケールがわずかに縮小
+    const commonHeartCompress = Math.min(0.065, peepNorm * 0.038 + pawNorm * 0.028);
+    let heartBaseScale = 1.0 - commonHeartCompress;
+    let beatAmp = 0.048;
+
+    // CS1心不全 ON時：低PEEPで拡大・強拍動、PEEP上昇で負荷軽減し落ち着く
+    if (patho.cs1HeartFailure) {
+      heartBaseScale += patho.cs1Overload * 0.11;
+      beatAmp = 0.045 + patho.cs1Overload * 0.045;
+    }
+
+    // 右心不全 / 前負荷低下 ON時：高PEEP・高Pawで明確に縮小（虚脱）し、拍動振幅も小さく（低1回拍出量）
+    const rhfEffectiveComp = patho.rightHeartFailure
+      ? Math.min(1.0, patho.preloadCompression + pawNorm * 0.30)
+      : 0.0;
+    if (patho.rightHeartFailure) {
+      heartBaseScale -= rhfEffectiveComp * 0.17;
+      beatAmp = Math.max(0.016, 0.046 * (1.0 - rhfEffectiveComp * 0.65));
+    }
+
+    const heartScale = Math.max(0.74, heartBaseScale + (beat1 + beat2) * beatAmp);
     // 緊張性気胸（右）時は気道内圧上昇に連動して心臓を左（健側・画面右方向）へ +26〜36px 偏位
     const heartShiftX = patho.pneumothoraxRight ? (patho.mediastinalShiftBase + pawNorm * 10.0) : 0;
 
@@ -819,8 +959,8 @@ export class AtlasAnatomyRenderer {
       this._drawTensionPneumothoraxSpace(pawNorm);
     }
 
-    // Layer 2.5: 胸水（胸郭と肺の間の胸腔下部液体レイヤー・メニスカス曲線）
-    this._drawPleuralEffusion(patho.effusionRatio, diaphShiftY, false);
+    // Layer 2.5: 胸水（胸郭と肺の間の胸腔下部液体レイヤー・メニスカス曲線・押し返し＆波打ち連動）
+    this._drawPleuralEffusion(patho.effusionRatio, this.smoothEffusionPush, diaphShiftY, nowMs, false);
 
     // Layer 3: 右肺・左肺（通常肺 or 肺断面 + 無気肺/肺水腫/ARDS/無換気クリッピング合成）
     const rightImg = this.showLungSection ? this.parts.rightLungSection : this.parts.rightLung;
@@ -837,7 +977,7 @@ export class AtlasAnatomyRenderer {
     );
 
     // Layer 3.5: 胸水の前面浸漬ハイライト（肺下端が胸水に浸かる立体感）
-    this._drawPleuralEffusion(patho.effusionRatio, diaphShiftY, true);
+    this._drawPleuralEffusion(patho.effusionRatio, this.smoothEffusionPush, diaphShiftY, nowMs, true);
 
     // Layer 3.8: COPD/喘息発作時の気管・気管支 赤色腫脹ハイライト
     if (patho.airwayNarrowing) {
@@ -853,16 +993,27 @@ export class AtlasAnatomyRenderer {
       this._drawRightMainstemETT();
     }
 
-    // Layer 5: 心臓（最前面・心切痕位置で拍動・緊張性気胸時は健側へ縦隔偏位）
+    // Layer 5: 心臓（最前面・心切痕位置で拍動・心肺相互作用＆縦隔偏位反映）
     if (this.showHeart) {
-      this._drawPart(
+      const heartYOffset = diaphShiftY * 0.18;
+      this._drawHeartWithOverlay(
         this.parts.heart,
         this.layout.heart,
         heartShiftX,
-        diaphShiftY * 0.18,
+        heartYOffset,
         heartScale,
-        heartScale
+        heartScale,
+        patho.cs1Overload,
+        rhfEffectiveComp
       );
+      // 右心不全/前負荷低下 ON時：高PEEPによる胸腔内圧の左右からの心臓圧迫エフェクト
+      if (patho.rightHeartFailure && (this.smoothPeep >= 9.5 || rhfEffectiveComp > 0.35)) {
+        this._drawHeartCompressionEffect(
+          this.layout.heart.x + heartShiftX,
+          this.layout.heart.y + heartYOffset,
+          Math.min(1.0, rhfEffectiveComp * 1.15)
+        );
+      }
     }
 
     // キャンバス下端のソフトビネット（横隔膜下部・胸郭下端を背景へ自然になじませる）
@@ -872,13 +1023,21 @@ export class AtlasAnatomyRenderer {
     ctx.fillStyle = bottomFade;
     ctx.fillRect(0, S - 48, S, 48);
 
-    // 病態プリセット / 片肺換気時の上部ステータスバッジ
+    // 病態プリセット / 片肺換気時の下部ステータスバッジ
     let statusMsg = null;
     if (patho.pneumothoraxRight) statusMsg = '⚠ 緊張性気胸 (右)：右肺虚脱・縦隔左方偏位';
     else if (patho.airwayNarrowing) statusMsg = '⚠ COPD / 喘息発作：気道狭窄・エアトラッピング';
     else if (patho.ardsMode) statusMsg = '⚠ ARDS：下肺野虚脱・白濁（PEEPでリクルート）';
     else if (patho.deepIntubationRight) statusMsg = '⚠ 片肺挿管 (右)：右肺過膨張・左肺無換気';
-    else if (this.rightLungRatio < 0.5 || this.leftLungRatio < 0.5) {
+    else if (patho.cs1HeartFailure) {
+      statusMsg = this.smoothPeep >= 8
+        ? '💙 CS1心不全：PEEPによる後負荷軽減・肺水腫改善中'
+        : '⚠ CS1心不全 (心原性肺水腫)：低PEEPでうっ血・心負荷増大';
+    } else if (patho.rightHeartFailure) {
+      statusMsg = this.smoothPeep >= 10
+        ? '⚠ 右心不全 / 前負荷低下：高PEEPで静脈還流阻害・心虚脱'
+        : 'ℹ 右心不全 / 前負荷低下：高PEEPによる心臓圧迫に注意';
+    } else if (this.rightLungRatio < 0.5 || this.leftLungRatio < 0.5) {
       statusMsg = this.leftLungRatio < 0.5 ? '⚠ 右片肺換気 (左肺換気低下)' : '⚠ 左片肺換気 (右肺換気低下)';
     }
     if (statusMsg) {

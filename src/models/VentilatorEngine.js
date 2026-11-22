@@ -31,6 +31,10 @@ export class VentilatorEngine {
     this.cycleVstart = 0;
     this.cycleVmax = 0;
     this.currentAutoPeep = 0;
+    this.totalSimTime = 0;
+    this.lastCycleStartTime = 0;
+    this.measuredRR = this.params.rrSet || 12;
+    this.lastVte = this.params.vtSet || 450;
 
     // コールバック
     this.onCycleFinished = null;
@@ -47,6 +51,14 @@ export class VentilatorEngine {
 
   startInspiration(type, isSpontTriggered) {
     this.currentAutoPeep = Math.max(0, this.V / this.effC);
+    if (this.lastCycleStartTime > 0) {
+      const cycleDur = this.totalSimTime - this.lastCycleStartTime;
+      if (cycleDur > 0.4 && cycleDur < 20.0) {
+        this.measuredRR = 60.0 / cycleDur;
+      }
+    }
+    this.lastCycleStartTime = this.totalSimTime;
+
     this.phase = 'INSP_FLOW';
     this.currentBreathType = type;
     this.phaseTime = 0;
@@ -66,19 +78,21 @@ export class VentilatorEngine {
   finishInspiration() {
     this.phase = 'EXH';
     this.phaseTime = 0;
+    const deliveredVt = Math.max(0, this.cycleVmax - this.cycleVstart);
+    this.lastVte = deliveredVt;
     if (this.onCycleFinished) {
-      const deliveredVt = Math.max(0, this.cycleVmax - this.cycleVstart);
       this.onCycleFinished({
         ppeak: Math.round(this.cyclePpeak),
         pplat: this.cyclePplat !== null ? Math.round(this.cyclePplat) : null,
-        vte: Math.round(deliveredVt)
+        vte: Math.round(deliveredVt),
+        rr: Math.round(this.measuredRR)
       });
     }
   }
 
   update(dt) {
-    // 毎フレーム病態力学から実効 C / 実効 R を算出
-    this.pathology = computePathologyMechanics(this.params);
+    // 毎フレーム病態力学から実効 C / 実効 R および胸水押し返し係数を算出
+    this.pathology = computePathologyMechanics(this.params, this.Paw);
     this.effC = this.pathology.effC;
     this.effR = this.pathology.effR;
 
@@ -106,6 +120,7 @@ export class VentilatorEngine {
 
   _step(dt) {
     const eps = 1e-9;
+    this.totalSimTime += dt;
     this.mandTimer += dt;
 
     // 1. 自発吸気努力（Pmus）の計算

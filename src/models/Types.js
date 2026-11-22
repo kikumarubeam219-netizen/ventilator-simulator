@@ -10,6 +10,9 @@ export const DEFAULT_PARAMS = {
   ps: 12,
   peep: 5,
   trig: 2.0,
+  fio2: 40,          // % (21〜100)
+  sex: 'male',       // 'male' | 'female'
+  heightCm: 170,     // cm (140〜200)
   spontRR: 0,
   pmusMax: 6,
   C: 50,             // mL/cmH2O
@@ -18,9 +21,11 @@ export const DEFAULT_PARAMS = {
   effusion: 0,       // 胸水 (%) 0〜100
   atelectasis: 0,    // 無気肺 (%) 0〜100
   edema: 0,          // 肺水腫 (%) 0〜100
-  clinicalPreset: 'normal', // 'normal' | 'pneumothorax' | 'copd' | 'ards' | 'one_lung'
+  clinicalPreset: 'normal', // 'normal' | 'pneumothorax' | 'copd' | 'ards' | 'one_lung' | 'cs1' | 'rhf'
   pneumothoraxRight: false,
   airwayNarrowing: false,
   ardsMode: false,
-  deepIntubationRight: false
+  deepIntubationRight: false,
+  cs1HeartFailure: false,
+  rightHeartFailure: false
 };

@@ -9,6 +9,11 @@ export class WaveformMonitor {
     this.freezeHistory = null;
     this.isFrozenOverlay = false;
 
+    // オートスケール現在値（初期標準スケール）
+    this.pawMaxScale = 40;
+    this.flowMaxScale = 80;
+    this.volMaxScale = 800;
+
     // カーソル計測用
     this.cursorX = null;
     this.isPinned = false; // クリックによる位置固定ピン留め
@@ -78,37 +83,77 @@ export class WaveformMonitor {
     this.isFrozenOverlay = false;
   }
 
+  /**
+   * 現在の波形（および比較用フリーズ波形）のピーク値から、
+   * ちらつきを抑えた段階的な適正スケール（Y軸上限）を自動決定する
+   */
+  _updateAutoScales(peepSetting) {
+    let maxPaw = Math.max(peepSetting || 0, 10);
+    let maxFlow = 20;
+    let maxVol = 200;
+
+    const scan = (arr) => {
+      if (!arr) return;
+      for (let i = 0; i < arr.length; i++) {
+        const s = arr[i];
+        if (!s) continue;
+        if (s.paw > maxPaw) maxPaw = s.paw;
+        if (s.palv > maxPaw) maxPaw = s.palv;
+        const af = Math.abs(s.flow);
+        if (af > maxFlow) maxFlow = af;
+        if (s.vol > maxVol) maxVol = s.vol;
+      }
+    };
+    scan(this.history);
+    scan(this.freezeHistory);
+
+    const pickStep = (val, steps) => {
+      for (const s of steps) {
+        if (val <= s * 0.90) return s;
+      }
+      return steps[steps.length - 1];
+    };
+
+    this.pawMaxScale = pickStep(maxPaw, [40, 60, 80, 100]);
+    this.flowMaxScale = pickStep(maxFlow, [60, 80, 120, 160]);
+    this.volMaxScale = pickStep(maxVol, [400, 600, 800, 1200, 1600]);
+  }
+
   render(peepSetting, isPaused = false) {
     const w = this.canvas.width;
     const h = this.canvas.height;
     const ctx = this.ctx;
     ctx.clearRect(0, 0, w, h);
 
+    // 適正オートスケール算出
+    this._updateAutoScales(peepSetting);
+
     const plotW = w - this.padL - this.padR;
 
-    // スケール座標マッピング
+    // スケール座標マッピング（オートスケール対応）
     const pawTop = 14, pawBot = h * 0.31;
-    const pawY = (v) => pawBot - (v / 40.0) * (pawBot - pawTop);
+    const pawY = (v) => pawBot - (v / this.pawMaxScale) * (pawBot - pawTop);
 
     const flowTop = h * 0.36, flowBot = h * 0.65;
     const flowZero = (flowTop + flowBot) / 2;
-    const flowY = (v) => flowZero - (v / 80.0) * ((flowBot - flowTop) / 2);
+    const flowY = (v) => flowZero - (v / this.flowMaxScale) * ((flowBot - flowTop) / 2);
 
     const volTop = h * 0.70, volBot = h * 0.96;
-    const volY = (v) => volBot - (v / 800.0) * (volBot - volTop);
+    const volY = (v) => volBot - (v / this.volMaxScale) * (volBot - volTop);
 
     ctx.font = '10px sans-serif';
     ctx.textAlign = 'right';
     ctx.textBaseline = 'middle';
 
-    // 1. 目盛り線とグリッド描画
-    [0, 10, 20, 30, 40].forEach(val => {
+    // 1. 目盛り線とグリッド描画（4等分グリッド）
+    const pawStep = this.pawMaxScale / 4;
+    [0, pawStep, pawStep * 2, pawStep * 3, this.pawMaxScale].forEach(val => {
       const y = pawY(val);
       ctx.strokeStyle = val === 0 ? '#475569' : '#1e293b';
       ctx.lineWidth = 1;
       ctx.beginPath(); ctx.moveTo(this.padL, y); ctx.lineTo(w - this.padR, y); ctx.stroke();
       ctx.fillStyle = '#fbbf24';
-      ctx.fillText(val, this.padL - 6, y);
+      ctx.fillText(Math.round(val), this.padL - 6, y);
     });
 
     // PEEP破線
@@ -118,22 +163,24 @@ export class WaveformMonitor {
     ctx.beginPath(); ctx.moveTo(this.padL, yPeep); ctx.lineTo(w - this.padR, yPeep); ctx.stroke();
     ctx.setLineDash([]);
 
-    [-80, -40, 0, 40, 80].forEach(val => {
+    const flowHalf = this.flowMaxScale / 2;
+    [-this.flowMaxScale, -flowHalf, 0, flowHalf, this.flowMaxScale].forEach(val => {
       const y = flowY(val);
       ctx.strokeStyle = val === 0 ? '#475569' : '#1e293b';
       ctx.lineWidth = 1;
       ctx.beginPath(); ctx.moveTo(this.padL, y); ctx.lineTo(w - this.padR, y); ctx.stroke();
       ctx.fillStyle = '#38bdf8';
-      ctx.fillText(val > 0 ? `+${val}` : val, this.padL - 6, y);
+      ctx.fillText(val > 0 ? `+${Math.round(val)}` : Math.round(val), this.padL - 6, y);
     });
 
-    [0, 200, 400, 600, 800].forEach(val => {
+    const volStep = this.volMaxScale / 4;
+    [0, volStep, volStep * 2, volStep * 3, this.volMaxScale].forEach(val => {
       const y = volY(val);
       ctx.strokeStyle = val === 0 ? '#475569' : '#1e293b';
       ctx.lineWidth = 1;
       ctx.beginPath(); ctx.moveTo(this.padL, y); ctx.lineTo(w - this.padR, y); ctx.stroke();
       ctx.fillStyle = '#34d399';
-      ctx.fillText(val, this.padL - 6, y);
+      ctx.fillText(Math.round(val), this.padL - 6, y);
     });
 
     // 左境界線

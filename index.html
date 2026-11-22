@@ -87,6 +87,11 @@
         <div id="mistrigger-alert" class="hidden absolute bottom-3 bg-rose-600/95 text-white text-xs font-bold px-3 py-1.5 rounded-full shadow-lg border border-rose-300 animate-bounce z-20">
           ⚠ ミストリガー発生！(Auto-PEEPにより横隔膜の陰圧が空振り)
         </div>
+
+        <!-- 循環抑制（静脈還流低下）警告アラートバッジ -->
+        <div id="preload-alert" class="hidden absolute bottom-9 bg-sky-900/95 text-sky-100 text-[11px] font-bold px-3 py-1.5 rounded-full shadow-lg border border-sky-400 animate-pulse z-20">
+          ⚠ 静脈還流低下・血圧低下リスク（高PEEPによる心臓圧迫）
+        </div>
       </div>
 
       <!-- 解剖図の下の独立1行凡例バー -->
@@ -105,7 +110,7 @@
       </div>
 
       <!-- 実測値モニター -->
-      <div class="w-full grid grid-cols-4 gap-2 bg-slate-900 p-2.5 rounded border border-slate-800 text-center mt-1">
+      <div class="w-full grid grid-cols-5 gap-1.5 bg-slate-900 p-2.5 rounded border border-slate-800 text-center mt-1">
         <div>
           <div class="text-[11px] text-slate-400">Ppeak</div>
           <div id="val-ppeak" class="text-lg font-bold text-amber-400">0</div>
@@ -120,6 +125,11 @@
           <div class="text-[11px] text-slate-400">Vte</div>
           <div id="val-vte" class="text-lg font-bold text-emerald-400">0</div>
           <div class="text-[10px] text-slate-500">mL</div>
+        </div>
+        <div>
+          <div class="text-[11px] text-slate-400">MV</div>
+          <div id="val-mv" class="text-lg font-bold text-sky-400">0.00</div>
+          <div class="text-[10px] text-slate-500">L/min</div>
         </div>
         <div>
           <div class="text-[11px] text-slate-400">Auto-PEEP</div>
@@ -204,7 +214,7 @@
         </div>
         <div id="wrap-pc">
           <div class="flex justify-between mb-1"><span class="text-slate-300">吸気圧 (PC)</span><span id="lbl-pc" class="font-bold text-sky-300">+15 cmH2O</span></div>
-          <input type="range" id="sl-pc" min="5" max="30" step="1" value="15" class="w-full">
+          <input type="range" id="sl-pc" min="5" max="50" step="1" value="15" class="w-full">
         </div>
         <div id="wrap-vt" class="disabled-control">
           <div class="flex justify-between mb-1"><span class="text-slate-300">1回換気量 (Vt)</span><span id="lbl-vt" class="font-bold text-sky-300">450 mL</span></div>
@@ -226,6 +236,10 @@
           <div class="flex justify-between mb-1"><span class="text-slate-300">トリガー感度</span><span id="lbl-trig" class="font-bold text-sky-300">-2.0 cmH2O</span></div>
           <input type="range" id="sl-trig" min="0.5" max="5.0" step="0.5" value="2.0" class="w-full">
         </div>
+        <div class="col-span-2 sm:col-span-4 border-t border-slate-700/70 pt-2 mt-0.5">
+          <div class="flex justify-between mb-1"><span class="text-cyan-200 font-semibold">吸入酸素濃度 (FiO2)</span><span id="lbl-fio2" class="font-bold text-cyan-300">40 %</span></div>
+          <input type="range" id="sl-fio2" min="21" max="100" step="1" value="40" class="w-full">
+        </div>
       </div>
     </div>
 
@@ -237,6 +251,30 @@
         </span>
       </div>
 
+      <!-- 性別・身長（予測体重 PBW / mL/kg） -->
+      <div class="mb-2 pb-2 border-b border-slate-700/70 flex flex-wrap items-center justify-between gap-2 text-[11px]">
+        <div class="flex items-center gap-1.5">
+          <div class="flex bg-slate-900 p-0.5 rounded border border-slate-700">
+            <label class="px-2 py-0.5 rounded cursor-pointer has-[:checked]:bg-sky-600 has-[:checked]:text-white font-bold text-slate-300">
+              <input type="radio" name="sex" value="male" checked class="hidden"> 男性
+            </label>
+            <label class="px-2 py-0.5 rounded cursor-pointer has-[:checked]:bg-rose-600 has-[:checked]:text-white font-bold text-slate-300">
+              <input type="radio" name="sex" value="female" class="hidden"> 女性
+            </label>
+          </div>
+          <div class="flex items-center gap-1.5">
+            <span class="text-slate-300 whitespace-nowrap">身長</span>
+            <input type="range" id="sl-height" min="140" max="200" step="1" value="170" class="w-20 sm:w-24">
+            <span id="lbl-height" class="font-bold text-sky-300 whitespace-nowrap w-11 text-right">170cm</span>
+          </div>
+        </div>
+        <div class="text-[10px] px-2 py-0.5 rounded bg-slate-900/90 border border-slate-700 text-slate-300 whitespace-nowrap">
+          PBW: <strong id="lbl-pbw" class="text-emerald-300">66.0 kg</strong>
+          <span class="mx-1 text-slate-600">|</span>
+          <strong id="lbl-vt-pbw" class="text-sky-300">6.8 mL/kg</strong>
+        </div>
+      </div>
+
       <!-- 臨床 病態プリセット切り替えボタン群 -->
       <div class="mb-2.5 pb-2 border-b border-slate-700/70">
         <div class="text-[10px] text-slate-400 mb-1">病態プリセット</div>
@@ -246,6 +284,8 @@
           <button id="btn-cp-copd" onclick="applyClinicalPreset('copd')" class="px-2 py-1 rounded bg-slate-800 hover:bg-amber-900 text-slate-200 border border-slate-600 transition">COPD / 喘息発作</button>
           <button id="btn-cp-ards" onclick="applyClinicalPreset('ards')" class="px-2 py-1 rounded bg-slate-800 hover:bg-fuchsia-900 text-slate-200 border border-slate-600 transition">ARDS</button>
           <button id="btn-cp-one_lung" onclick="applyClinicalPreset('one_lung')" class="px-2 py-1 rounded bg-slate-800 hover:bg-indigo-900 text-slate-200 border border-slate-600 transition">片肺挿管 (右)</button>
+          <button id="btn-cp-cs1" onclick="applyClinicalPreset('cs1')" class="px-2 py-1 rounded bg-slate-800 hover:bg-red-900 text-slate-200 border border-slate-600 transition">CS1心不全 (心原性肺水腫)</button>
+          <button id="btn-cp-rhf" onclick="applyClinicalPreset('rhf')" class="px-2 py-1 rounded bg-slate-800 hover:bg-cyan-900 text-slate-200 border border-slate-600 transition">右心不全 / 前負荷低下</button>
         </div>
       </div>
 
@@ -290,6 +330,54 @@
     </div>
   </div>
 
-  <script type="module" src="./src/main.js"></script>
+  <!-- 血液ガス分析 (ABG) モニター（開閉式アコーディオン・初期状態は折りたたみ） -->
+  <div class="panel overflow-hidden">
+    <button id="abg-accordion-btn" onclick="toggleAbgAccordion()" class="w-full px-4 py-2 flex items-center justify-between bg-slate-800/80 hover:bg-slate-800 transition text-left">
+      <div class="flex items-center gap-2.5">
+        <span class="text-sm font-bold text-rose-300">血液ガス分析（ABG）モニター</span>
+        <span class="text-[10px] px-2 py-0.5 rounded bg-slate-900 border border-slate-700 text-slate-400">PBW・FiO2・換気量・病態シャント連動（リアルタイム追従）</span>
+      </div>
+      <div class="flex items-center gap-2 text-xs text-slate-300">
+        <span id="abg-accordion-icon" class="font-bold text-sky-300">▼ 開く</span>
+      </div>
+    </button>
+
+    <div id="abg-accordion-body" class="max-h-0 opacity-0 overflow-hidden transition-all duration-300 ease-in-out">
+      <div class="p-3 border-t border-slate-700/80 grid grid-cols-2 sm:grid-cols-5 gap-2.5 text-center">
+        <!-- pH -->
+        <div class="bg-slate-900/90 rounded border border-slate-800 p-2.5">
+          <div class="text-[11px] text-slate-400 font-semibold">pH</div>
+          <div id="abg-ph" class="text-2xl font-bold text-emerald-400 my-0.5 tabular-nums">7.40</div>
+          <div class="text-[10px] text-slate-500">基準: 7.35〜7.45</div>
+        </div>
+        <!-- PaCO2 -->
+        <div class="bg-slate-900/90 rounded border border-slate-800 p-2.5">
+          <div class="text-[11px] text-slate-400 font-semibold">PaCO2</div>
+          <div id="abg-paco2" class="text-2xl font-bold text-emerald-400 my-0.5 tabular-nums">40.0</div>
+          <div class="text-[10px] text-slate-500">mmHg (35〜45)</div>
+        </div>
+        <!-- PaO2 -->
+        <div class="bg-slate-900/90 rounded border border-slate-800 p-2.5">
+          <div class="text-[11px] text-slate-400 font-semibold">PaO2</div>
+          <div id="abg-pao2" class="text-2xl font-bold text-emerald-400 my-0.5 tabular-nums">175</div>
+          <div class="text-[10px] text-slate-500">mmHg (80〜100)</div>
+        </div>
+        <!-- HCO3- -->
+        <div class="bg-slate-900/90 rounded border border-slate-800 p-2.5">
+          <div class="text-[11px] text-slate-400 font-semibold">HCO3-</div>
+          <div id="abg-hco3" class="text-2xl font-bold text-emerald-400 my-0.5 tabular-nums">24.0</div>
+          <div class="text-[10px] text-slate-500">mEq/L (22〜26)</div>
+        </div>
+        <!-- P/F比 -->
+        <div class="bg-slate-900/90 rounded border border-slate-800 p-2.5 col-span-2 sm:col-span-1">
+          <div class="text-[11px] text-slate-400 font-semibold">P/F 比</div>
+          <div id="abg-pf" class="text-2xl font-bold text-emerald-400 my-0.5 tabular-nums">438</div>
+          <div class="text-[10px] text-slate-500">基準: 300以上</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="./src/main.js?v=20261122"></script>
 </body>
 </html>

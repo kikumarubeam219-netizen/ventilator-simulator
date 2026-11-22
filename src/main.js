@@ -1,19 +1,27 @@
 import { DEFAULT_PARAMS } from './models/Types.js';
 import { VentilatorEngine } from './models/VentilatorEngine.js';
+import { BloodGasEngine } from './models/BloodGasEngine.js';
 import { AnatomyRenderer } from './views/AnatomyRenderer.js';
 import { AtlasAnatomyRenderer } from './views/AtlasAnatomyRenderer.js';
 import { WaveformMonitor } from './views/WaveformMonitor.js';
 
 let simPaused = false;
 let anatomyMode = 'atlas'; // 'atlas' | '3d'
+let currentLungVentMode = 'both'; // 'both' | 'right' | 'left'
+let abgOpen = false;
+let latestMeasuredVte = null;
+let latestMeasuredRR = null;
 let clinicalFlags = {
   clinicalPreset: 'normal',
   pneumothoraxRight: false,
   airwayNarrowing: false,
   ardsMode: false,
-  deepIntubationRight: false
+  deepIntubationRight: false,
+  cs1HeartFailure: false,
+  rightHeartFailure: false
 };
 const engine = new VentilatorEngine(DEFAULT_PARAMS);
+const bloodGas = new BloodGasEngine();
 const anatomyContainer = document.getElementById('anatomy-3d-container');
 const anatomy = new AnatomyRenderer(anatomyContainer);
 const atlasAnatomy = new AtlasAnatomyRenderer(document.getElementById('lungCanvas'));
@@ -48,6 +56,7 @@ window.setAnatomyMode = (mode) => {
 
 // 左右肺の個別換気分布制御（片肺挿管などのシナリオ用）
 window.setLungVentMode = (mode) => {
+  currentLungVentMode = mode;
   if (mode === 'both') atlasAnatomy.setLungVentilationRatio(1.0, 1.0);
   else if (mode === 'right') atlasAnatomy.setLungVentilationRatio(1.0, 0.12);
   else if (mode === 'left') atlasAnatomy.setLungVentilationRatio(0.12, 1.0);
@@ -143,13 +152,23 @@ engine.onTriggered = ({ isSpontTriggered, autoPeep }) => {
   }
 };
 
-engine.onCycleFinished = ({ ppeak, pplat, vte }) => {
+engine.onCycleFinished = ({ ppeak, pplat, vte, rr }) => {
   const elPeak = document.getElementById('val-ppeak');
   const elPlat = document.getElementById('val-pplat');
   const elVte = document.getElementById('val-vte');
+  const elMv = document.getElementById('val-mv');
+  const safeVte = Number.isFinite(engine.lastVte) ? engine.lastVte : (Number(vte) || 0);
+  const safeRr = Number(rr) || engine.measuredRR || engine.params.rrSet || 12;
+  latestMeasuredVte = safeVte;
+  latestMeasuredRR = safeRr;
+
   if (elPeak) elPeak.textContent = ppeak;
   if (elPlat) elPlat.textContent = pplat !== null ? pplat : '-';
   if (elVte) elVte.textContent = vte;
+  if (elMv) {
+    const mv = (safeVte * safeRr) / 1000.0;
+    elMv.textContent = Number.isFinite(mv) ? mv.toFixed(2) : '0.00';
+  }
   
   const badge = document.getElementById('trigger-badge');
   if (badge) {
@@ -163,11 +182,15 @@ function syncUI() {
   const modeEl = document.querySelector('input[name="mode"]:checked');
   const ctrlTypeEl = document.querySelector('input[name="ctrlType"]:checked');
   const flowPatEl = document.querySelector('input[name="flowPat"]:checked');
+  const sexEl = document.querySelector('input[name="sex"]:checked');
 
   const params = {
     mode: modeEl ? modeEl.value : 'AC',
     ctrlType: ctrlTypeEl ? ctrlTypeEl.value : 'PCV',
     flowPat: flowPatEl ? flowPatEl.value : 'SQUARE',
+    sex: sexEl ? sexEl.value : 'male',
+    heightCm: parseFloat(document.getElementById('sl-height')?.value ?? 170),
+    fio2: parseFloat(document.getElementById('sl-fio2')?.value ?? 40),
     rrSet: parseFloat(document.getElementById('sl-rr').value),
     ti: parseFloat(document.getElementById('sl-ti').value),
     pc: parseFloat(document.getElementById('sl-pc').value),
@@ -201,6 +224,13 @@ function syncUI() {
   document.getElementById('lbl-ps').textContent = `+${params.ps} cmH2O`;
   document.getElementById('lbl-peep').textContent = `${params.peep} cmH2O`;
   document.getElementById('lbl-trig').textContent = `-${params.trig.toFixed(1)} cmH2O`;
+  const lblFio2 = document.getElementById('lbl-fio2');
+  if (lblFio2) lblFio2.textContent = `${params.fio2} %`;
+  const lblHeight = document.getElementById('lbl-height');
+  if (lblHeight) lblHeight.textContent = `${params.heightCm}cm`;
+  const pbw = BloodGasEngine.computePBW(params.sex, params.heightCm);
+  const lblPbw = document.getElementById('lbl-pbw');
+  if (lblPbw) lblPbw.textContent = `${pbw.toFixed(1)} kg`;
   document.getElementById('lbl-spont-rr').textContent = params.spontRR === 0 ? '0 /分 (なし)' : `${params.spontRR} /分`;
   document.getElementById('lbl-pmus').textContent = `${params.pmusMax} cmH2O`;
   document.getElementById('lbl-comp').textContent = `${params.C} mL/cmH2O`;
@@ -238,25 +268,43 @@ function syncUI() {
   const elEffR = document.getElementById('lbl-eff-r');
   if (elEffC) elEffC.textContent = engine.effC.toFixed(1);
   if (elEffR) elEffR.textContent = engine.effR.toFixed(1);
+
+  // PEEPリクルートメントによる実効病変率をスライダー横ラベルに反映（胸水はPEEPで体積不変のため設定値を維持）
+  const patho = engine.pathology;
+  const effAtelPct = Math.round(patho.effectiveAtel * 100);
+  const effEdemaPct = Math.round(patho.effectiveEdema * 100);
+  if (lblEff) lblEff.textContent = `${params.effusion}%`;
+  if (lblAtel) lblAtel.textContent = (params.atelectasis > 0 && effAtelPct < params.atelectasis) ? `${params.atelectasis}%→${effAtelPct}%` : `${params.atelectasis}%`;
+  if (lblEdema) lblEdema.textContent = (params.edema > 0 && effEdemaPct < params.edema) ? `${params.edema}%→${effEdemaPct}%` : `${params.edema}%`;
+
+  // 循環抑制（静脈還流低下）警告バッジのリアルタイム制御
+  const preloadAlertEl = document.getElementById('preload-alert');
+  if (preloadAlertEl) {
+    preloadAlertEl.classList.toggle('hidden', !engine.pathology?.preloadAlert);
+  }
 }
 
-// 臨床 4 大病態プリセット切替 + 正常肺リセット
+// 臨床 病態・心疾患プリセット切替 + 正常肺リセット
 window.applyClinicalPreset = (preset) => {
-  // 共通初期化（既存3病態スライダー・フラグ・換気分布をリセット）
+  // 共通初期化（既存3病態スライダー・病態/循環フラグ・警告バッジ・換気分布をリセット）
   clinicalFlags = {
     clinicalPreset: preset,
     pneumothoraxRight: false,
     airwayNarrowing: false,
     ardsMode: false,
-    deepIntubationRight: false
+    deepIntubationRight: false,
+    cs1HeartFailure: false,
+    rightHeartFailure: false
   };
   document.getElementById('sl-effusion').value = 0;
   document.getElementById('sl-atelectasis').value = 0;
   document.getElementById('sl-edema').value = 0;
+  document.getElementById('preload-alert')?.classList.add('hidden');
 
   if (preset === 'normal') {
     document.getElementById('sl-comp').value = 50;
     document.getElementById('sl-res').value = 10;
+    document.getElementById('sl-hr').value = 75;
     window.setLungVentMode('both');
   } else if (preset === 'pneumothorax') {
     document.getElementById('sl-comp').value = 22;
@@ -284,6 +332,20 @@ window.applyClinicalPreset = (preset) => {
     clinicalFlags.deepIntubationRight = true;
     // 既存の換気分布モードを「右片肺 (right)」へ自動切替
     window.setLungVentMode('right');
+  } else if (preset === 'cs1') {
+    document.getElementById('sl-comp').value = 32;
+    document.getElementById('sl-res').value = 16;
+    document.getElementById('sl-edema').value = 75;
+    document.getElementById('sl-effusion').value = 30;
+    document.getElementById('sl-hr').value = 120;
+    clinicalFlags.cs1HeartFailure = true;
+    window.setLungVentMode('both');
+  } else if (preset === 'rhf') {
+    document.getElementById('sl-comp').value = 50;
+    document.getElementById('sl-res').value = 10;
+    document.getElementById('sl-hr').value = 125;
+    clinicalFlags.rightHeartFailure = true;
+    window.setLungVentMode('both');
   }
 
   // 病態プリセットボタンのハイライト更新
@@ -292,9 +354,11 @@ window.applyClinicalPreset = (preset) => {
     pneumothorax: 'bg-rose-700 text-white border-rose-400 font-bold',
     copd: 'bg-amber-700 text-white border-amber-400 font-bold',
     ards: 'bg-fuchsia-700 text-white border-fuchsia-400 font-bold',
-    one_lung: 'bg-indigo-700 text-white border-indigo-400 font-bold'
+    one_lung: 'bg-indigo-700 text-white border-indigo-400 font-bold',
+    cs1: 'bg-red-700 text-white border-red-400 font-bold',
+    rhf: 'bg-cyan-700 text-white border-cyan-400 font-bold'
   };
-  ['normal', 'pneumothorax', 'copd', 'ards', 'one_lung'].forEach((key) => {
+  ['normal', 'pneumothorax', 'copd', 'ards', 'one_lung', 'cs1', 'rhf'].forEach((key) => {
     const btn = document.getElementById(`btn-cp-${key}`);
     if (!btn) return;
     btn.className = key === preset
@@ -354,6 +418,64 @@ window.togglePauseSim = () => {
   btn.classList.toggle('bg-amber-600', !simPaused);
 };
 
+// 血液ガス（ABG）モニター アコーディオン開閉
+window.toggleAbgAccordion = () => {
+  abgOpen = !abgOpen;
+  const body = document.getElementById('abg-accordion-body');
+  const icon = document.getElementById('abg-accordion-icon');
+  if (body) {
+    body.classList.toggle('max-h-0', !abgOpen);
+    body.classList.toggle('opacity-0', !abgOpen);
+    body.classList.toggle('max-h-[260px]', abgOpen);
+    body.classList.toggle('opacity-100', abgOpen);
+  }
+  if (icon) {
+    icon.textContent = abgOpen ? '▲ 閉じる' : '▼ 開く';
+  }
+};
+
+function updateAbgDisplay(abg) {
+  const elPh = document.getElementById('abg-ph');
+  const elCo2 = document.getElementById('abg-paco2');
+  const elO2 = document.getElementById('abg-pao2');
+  const elHco3 = document.getElementById('abg-hco3');
+  const elPf = document.getElementById('abg-pf');
+  const elVtPbw = document.getElementById('lbl-vt-pbw');
+
+  const setColor = (el, level) => {
+    if (!el) return;
+    el.classList.remove('text-emerald-400', 'text-amber-300', 'text-rose-400');
+    if (level === 'danger') el.classList.add('text-rose-400');
+    else if (level === 'warn') el.classList.add('text-amber-300');
+    else el.classList.add('text-emerald-400');
+  };
+
+  if (elPh) {
+    elPh.textContent = abg.pH.toFixed(2);
+    setColor(elPh, (abg.pH < 7.25 || abg.pH > 7.55) ? 'danger' : (abg.pH < 7.35 || abg.pH > 7.45) ? 'warn' : 'ok');
+  }
+  if (elCo2) {
+    elCo2.textContent = abg.paCO2.toFixed(1);
+    setColor(elCo2, (abg.paCO2 > 55 || abg.paCO2 < 28) ? 'danger' : (abg.paCO2 > 45 || abg.paCO2 < 35) ? 'warn' : 'ok');
+  }
+  if (elO2) {
+    elO2.textContent = Math.round(abg.paO2);
+    setColor(elO2, abg.paO2 < 60 ? 'danger' : abg.paO2 < 80 ? 'warn' : 'ok');
+  }
+  if (elHco3) {
+    elHco3.textContent = abg.hco3.toFixed(1);
+    setColor(elHco3, (abg.hco3 < 18 || abg.hco3 > 30) ? 'danger' : (abg.hco3 < 22 || abg.hco3 > 26) ? 'warn' : 'ok');
+  }
+  if (elPf) {
+    elPf.textContent = Math.round(abg.pfRatio);
+    setColor(elPf, abg.pfRatio < 100 ? 'danger' : abg.pfRatio < 200 ? 'warn' : abg.pfRatio < 300 ? 'warn' : 'ok');
+  }
+  if (elVtPbw) {
+    elVtPbw.textContent = `${abg.vtPerKg.toFixed(1)} mL/kg`;
+    elVtPbw.className = abg.vtPerKg > 8.5 ? 'text-amber-300 font-bold' : abg.vtPerKg < 4.5 ? 'text-rose-400 font-bold' : 'text-sky-300 font-bold';
+  }
+}
+
 document.querySelectorAll('input').forEach(input => {
   input.addEventListener('input', syncUI);
   input.addEventListener('change', syncUI);
@@ -367,6 +489,10 @@ function loop(now) {
 
   if (!simPaused) {
     const sample = engine.update(dt);
+    const abgVte = Number.isFinite(engine.lastVte) ? engine.lastVte : (latestMeasuredVte ?? engine.params.vtSet);
+    const abgRr = Number.isFinite(engine.measuredRR) ? engine.measuredRR : (latestMeasuredRR ?? engine.params.rrSet);
+    const abg = bloodGas.update(dt, engine.params, engine.pathology, abgVte, abgRr, currentLungVentMode);
+    updateAbgDisplay(abg);
     monitor.pushSample(sample);
     monitor.render(engine.params.peep, false);
     if (anatomyMode === 'atlas') {
