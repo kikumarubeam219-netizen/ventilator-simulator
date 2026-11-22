@@ -121,7 +121,7 @@ window.toggleLungSection = () => {
   const visible = atlasAnatomy.toggleLungSection();
   const btn = document.getElementById('btn-toggle-section');
   if (btn) {
-    btn.textContent = visible ? '肺断面 (透過): ON' : '肺断面 (透過): OFF';
+    btn.textContent = visible ? '肺断面: ON' : '肺断面: OFF';
     btn.classList.toggle('bg-teal-700', visible);
     btn.classList.toggle('text-white', visible);
     btn.classList.toggle('border-teal-400', visible);
@@ -273,19 +273,19 @@ function syncUI() {
   const lblEdema = document.getElementById('lbl-edema');
   if (lblEdema) lblEdema.textContent = `${params.edema}%`;
 
-  // コントロール活性/非活性
+  // 選択中モードで使用しないコントロールは display: none (hidden) で非表示にして省スペース化
   const isPSV = (params.mode === 'PSV');
   const isVCV = (!isPSV && params.ctrlType === 'VCV');
   const isPCV = (!isPSV && params.ctrlType === 'PCV');
 
-  document.getElementById('ctrl-type-group').classList.toggle('disabled-control', isPSV);
-  document.getElementById('flow-pat-group').classList.toggle('disabled-control', !isVCV);
-  document.getElementById('wrap-rr').classList.toggle('disabled-control', isPSV);
-  document.getElementById('wrap-ti').classList.toggle('disabled-control', isPSV);
-  document.getElementById('wrap-pc').classList.toggle('disabled-control', !isPCV);
-  document.getElementById('wrap-vt').classList.toggle('disabled-control', !isVCV);
-  document.getElementById('wrap-tpause').classList.toggle('disabled-control', !isVCV);
-  document.getElementById('wrap-ps').classList.toggle('disabled-control', params.mode === 'AC');
+  document.getElementById('ctrl-type-group').classList.toggle('hidden', isPSV);
+  document.getElementById('flow-pat-group').classList.toggle('hidden', !isVCV);
+  document.getElementById('wrap-rr').classList.toggle('hidden', isPSV);
+  document.getElementById('wrap-ti').classList.toggle('hidden', isPSV);
+  document.getElementById('wrap-pc').classList.toggle('hidden', !isPCV);
+  document.getElementById('wrap-vt').classList.toggle('hidden', !isVCV);
+  document.getElementById('wrap-tpause').classList.toggle('hidden', !isVCV);
+  document.getElementById('wrap-ps').classList.toggle('hidden', params.mode === 'AC');
 
   engine.updateParams(params);
 
@@ -388,8 +388,8 @@ window.applyClinicalPreset = (preset) => {
     const btn = document.getElementById(`btn-cp-${key}`);
     if (!btn) return;
     btn.className = key === preset
-      ? `px-2 py-1 rounded border transition ${btnStyles[key]}`
-      : 'px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-600 transition';
+      ? `px-1.5 py-0.5 rounded border transition ${btnStyles[key]}`
+      : 'px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-600 transition';
   });
 
   syncUI();
@@ -456,7 +456,7 @@ window.toggleAbgAccordion = () => {
     body.classList.toggle('opacity-100', abgOpen);
   }
   if (icon) {
-    icon.textContent = abgOpen ? '▲ 閉じる' : '▼ 開く';
+    icon.textContent = abgOpen ? '▲ 閉じる' : '▼ 詳細';
   }
 };
 
@@ -466,6 +466,9 @@ function updateAbgDisplay(abg) {
   const elO2 = document.getElementById('abg-pao2');
   const elHco3 = document.getElementById('abg-hco3');
   const elPf = document.getElementById('abg-pf');
+  const elSumPh = document.getElementById('abg-sum-ph');
+  const elSumCo2 = document.getElementById('abg-sum-paco2');
+  const elSumPf = document.getElementById('abg-sum-pf');
   const elVtPbw = document.getElementById('lbl-vt-pbw');
 
   const setColor = (el, level) => {
@@ -476,26 +479,28 @@ function updateAbgDisplay(abg) {
     else el.classList.add('text-emerald-400');
   };
 
-  if (elPh) {
-    elPh.textContent = abg.pH.toFixed(2);
-    setColor(elPh, (abg.pH < 7.25 || abg.pH > 7.55) ? 'danger' : (abg.pH < 7.35 || abg.pH > 7.45) ? 'warn' : 'ok');
-  }
-  if (elCo2) {
-    elCo2.textContent = abg.paCO2.toFixed(1);
-    setColor(elCo2, (abg.paCO2 > 55 || abg.paCO2 < 28) ? 'danger' : (abg.paCO2 > 45 || abg.paCO2 < 35) ? 'warn' : 'ok');
-  }
-  if (elO2) {
-    elO2.textContent = Math.round(abg.paO2);
-    setColor(elO2, abg.paO2 < 60 ? 'danger' : abg.paO2 < 80 ? 'warn' : 'ok');
-  }
-  if (elHco3) {
-    elHco3.textContent = abg.hco3.toFixed(1);
-    setColor(elHco3, (abg.hco3 < 18 || abg.hco3 > 30) ? 'danger' : (abg.hco3 < 22 || abg.hco3 > 26) ? 'warn' : 'ok');
-  }
-  if (elPf) {
-    elPf.textContent = Math.round(abg.pfRatio);
-    setColor(elPf, abg.pfRatio < 100 ? 'danger' : abg.pfRatio < 200 ? 'warn' : abg.pfRatio < 300 ? 'warn' : 'ok');
-  }
+  const phLevel = (abg.pH < 7.25 || abg.pH > 7.55) ? 'danger' : (abg.pH < 7.35 || abg.pH > 7.45) ? 'warn' : 'ok';
+  const co2Level = (abg.paCO2 > 55 || abg.paCO2 < 28) ? 'danger' : (abg.paCO2 > 45 || abg.paCO2 < 35) ? 'warn' : 'ok';
+  const o2Level = abg.paO2 < 60 ? 'danger' : abg.paO2 < 80 ? 'warn' : 'ok';
+  const hco3Level = (abg.hco3 < 18 || abg.hco3 > 30) ? 'danger' : (abg.hco3 < 22 || abg.hco3 > 26) ? 'warn' : 'ok';
+  const pfLevel = abg.pfRatio < 100 ? 'danger' : abg.pfRatio < 300 ? 'warn' : 'ok';
+
+  const phTxt = abg.pH.toFixed(2);
+  const co2Txt = abg.paCO2.toFixed(1);
+  const pfTxt = String(Math.round(abg.pfRatio));
+
+  if (elPh) { elPh.textContent = phTxt; setColor(elPh, phLevel); }
+  if (elSumPh) { elSumPh.textContent = phTxt; setColor(elSumPh, phLevel); }
+
+  if (elCo2) { elCo2.textContent = co2Txt; setColor(elCo2, co2Level); }
+  if (elSumCo2) { elSumCo2.textContent = co2Txt; setColor(elSumCo2, co2Level); }
+
+  if (elO2) { elO2.textContent = Math.round(abg.paO2); setColor(elO2, o2Level); }
+  if (elHco3) { elHco3.textContent = abg.hco3.toFixed(1); setColor(elHco3, hco3Level); }
+
+  if (elPf) { elPf.textContent = pfTxt; setColor(elPf, pfLevel); }
+  if (elSumPf) { elSumPf.textContent = pfTxt; setColor(elSumPf, pfLevel); }
+
   if (elVtPbw) {
     elVtPbw.textContent = `${abg.vtPerKg.toFixed(1)} mL/kg`;
     elVtPbw.className = abg.vtPerKg > 8.5 ? 'text-amber-300 font-bold' : abg.vtPerKg < 4.5 ? 'text-rose-400 font-bold' : 'text-sky-300 font-bold';
@@ -670,12 +675,12 @@ window.setImagingTab = (tab) => {
 
   const isCompare = (tab === 'compare');
   if (popup) {
-    popup.classList.toggle('w-[396px]', !isCompare);
-    popup.classList.toggle('w-[720px]', isCompare);
+    popup.classList.toggle('sm:w-[396px]', !isCompare);
+    popup.classList.toggle('md:w-[720px]', isCompare);
   }
   if (grid) {
     grid.classList.toggle('grid-cols-1', !isCompare);
-    grid.classList.toggle('grid-cols-2', isCompare);
+    grid.classList.toggle('md:grid-cols-2', isCompare);
   }
 
   paneXp?.classList.toggle('hidden', tab !== 'xp');
