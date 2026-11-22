@@ -1,6 +1,11 @@
+import { computePathologyMechanics } from './PathologyMechanics.js';
+
 export class VentilatorEngine {
   constructor(initialParams) {
     this.params = { ...initialParams };
+    this.pathology = computePathologyMechanics(this.params);
+    this.effC = this.pathology.effC;
+    this.effR = this.pathology.effR;
     
     // 状態管理
     this.phase = 'EXH'; // 'INSP_FLOW', 'INSP_PAUSE', 'EXH'
@@ -35,10 +40,13 @@ export class VentilatorEngine {
 
   updateParams(newParams) {
     this.params = { ...this.params, ...newParams };
+    this.pathology = computePathologyMechanics(this.params);
+    this.effC = this.pathology.effC;
+    this.effR = this.pathology.effR;
   }
 
   startInspiration(type, isSpontTriggered) {
-    this.currentAutoPeep = Math.max(0, this.V / this.params.C);
+    this.currentAutoPeep = Math.max(0, this.V / this.effC);
     this.phase = 'INSP_FLOW';
     this.currentBreathType = type;
     this.phaseTime = 0;
@@ -69,6 +77,11 @@ export class VentilatorEngine {
   }
 
   update(dt) {
+    // 毎フレーム病態力学から実効 C / 実効 R を算出
+    this.pathology = computePathologyMechanics(this.params);
+    this.effC = this.pathology.effC;
+    this.effR = this.pathology.effR;
+
     // フレームレートに依存しない高精度積分のため、最大1ms刻みのサブステップに分割して計算
     const maxSubDt = 0.001;
     const steps = Math.max(1, Math.ceil(dt / maxSubDt));
@@ -85,7 +98,9 @@ export class VentilatorEngine {
       vol: this.V,
       pmus: this.Pmus,
       phase: this.phase,
-      currentBreathType: this.currentBreathType
+      currentBreathType: this.currentBreathType,
+      effC: this.effC,
+      effR: this.effR
     };
   }
 
@@ -125,7 +140,7 @@ export class VentilatorEngine {
     // 2. 呼気相トリガー判定
     const mandCycle = 60.0 / this.params.rrSet;
     if (this.phase === 'EXH') {
-      const elasticRecoil = this.V / this.params.C;
+      const elasticRecoil = this.V / this.effC;
       if (this.inSpontEffort && !this.triggeredInThisEffort && this.phaseTime > 0.25) {
         if (this.Pmus - elasticRecoil >= this.params.trig) {
           this.triggeredInThisEffort = true;
@@ -144,21 +159,21 @@ export class VentilatorEngine {
       }
     }
 
-    // 3. 運動方程式による圧・流速計算
+    // 3. 運動方程式による圧・流速計算（実効コンプライアンス effC / 実効気道抵抗 effR を使用）
     const Vt_L = this.params.vtSet / 1000.0;
-    const C_L = this.params.C / 1000.0;
+    const C_L = this.effC / 1000.0;
     const V_L = this.V / 1000.0;
     this.Palv = (V_L / C_L) + this.params.peep - this.Pmus;
 
     if (this.phase === 'INSP_FLOW') {
       if (this.currentBreathType === 'PS') {
         this.Paw = this.params.peep + this.params.ps;
-        this.Flow = (this.Paw - this.Palv) / this.params.R;
+        this.Flow = (this.Paw - this.Palv) / this.effR;
         if (this.Flow > this.peakFlow) this.peakFlow = this.Flow;
       } else {
         if (this.params.ctrlType === 'PCV') {
           this.Paw = this.params.peep + this.params.pc;
-          this.Flow = (this.Paw - this.Palv) / this.params.R;
+          this.Flow = (this.Paw - this.Palv) / this.effR;
         } else {
           // VCV
           const tFlow = Math.max(0.2, this.params.ti - this.params.tPause);
@@ -170,7 +185,7 @@ export class VentilatorEngine {
               const tMid = Math.min(tFlow, this.phaseTime + 0.5 * dt);
               this.Flow = fPeak * (1.0 - 0.5 * (tMid / tFlow));
             }
-            this.Paw = (this.Flow * this.params.R) + this.Palv;
+            this.Paw = (this.Flow * this.effR) + this.Palv;
           } else if (this.params.tPause > 0 && this.phaseTime < this.params.ti - eps) {
             this.phase = 'INSP_PAUSE';
             this.Flow = 0;
@@ -184,9 +199,9 @@ export class VentilatorEngine {
       this.Paw = this.Palv;
       this.cyclePplat = this.Paw;
     } else if (this.phase === 'EXH') {
-      const circuitDrop = Math.min(this.params.trig, Math.max(0, this.Pmus - (this.V / this.params.C)) * 0.65);
+      const circuitDrop = Math.min(this.params.trig, Math.max(0, this.Pmus - (this.V / this.effC)) * 0.65);
       this.Paw = this.params.peep - circuitDrop;
-      this.Flow = (this.Paw - this.Palv) / (this.params.R * 1.25);
+      this.Flow = (this.Paw - this.Palv) / (this.effR * 1.25);
     }
 
     // 4. 換気量積算とフェーズ時間進行

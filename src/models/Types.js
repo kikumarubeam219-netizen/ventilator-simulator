@@ -13,5 +13,14 @@ export const DEFAULT_PARAMS = {
   spontRR: 0,
   pmusMax: 6,
   C: 50,             // mL/cmH2O
-  R: 10              // cmH2O / (L/s)
+  R: 10,             // cmH2O / (L/s)
+  hr: 75,            // bpm
+  effusion: 0,       // 胸水 (%) 0〜100
+  atelectasis: 0,    // 無気肺 (%) 0〜100
+  edema: 0,          // 肺水腫 (%) 0〜100
+  clinicalPreset: 'normal', // 'normal' | 'pneumothorax' | 'copd' | 'ards' | 'one_lung'
+  pneumothoraxRight: false,
+  airwayNarrowing: false,
+  ardsMode: false,
+  deepIntubationRight: false
 };
