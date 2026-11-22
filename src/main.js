@@ -4,6 +4,7 @@ import { BloodGasEngine } from './models/BloodGasEngine.js';
 import { AnatomyRenderer } from './views/AnatomyRenderer.js';
 import { AtlasAnatomyRenderer } from './views/AtlasAnatomyRenderer.js';
 import { AlveolusRenderer } from './views/AlveolusRenderer.js';
+import { ImagingEitRenderer } from './views/ImagingEitRenderer.js';
 import { WaveformMonitor } from './views/WaveformMonitor.js';
 
 let simPaused = false;
@@ -11,8 +12,11 @@ let anatomyMode = 'atlas'; // 'atlas' | '3d'
 let currentLungVentMode = 'both'; // 'both' | 'right' | 'left'
 let abgOpen = false;
 let alveolusOpen = false;
+let imagingOpen = false;
+let imagingTab = 'xp'; // 'xp' | 'ct' | 'eit' | 'compare'
 let lastAlveolusUiUpdate = 0;
 let lastAlveolusStatusKey = '';
+let lastEitUiUpdate = 0;
 let latestAbg = {
   pH: 7.40,
   paCO2: 40.0,
@@ -42,6 +46,11 @@ const anatomy = new AnatomyRenderer(anatomyContainer);
 const atlasAnatomy = new AtlasAnatomyRenderer(document.getElementById('lungCanvas'));
 const alveolusCanvas = document.getElementById('alveolusCanvas');
 const alveolusView = alveolusCanvas ? new AlveolusRenderer(alveolusCanvas) : null;
+const imagingView = new ImagingEitRenderer({
+  xpCanvas: document.getElementById('xpCanvas'),
+  ctCanvas: document.getElementById('ctCanvas'),
+  eitCanvas: document.getElementById('eitCanvas')
+});
 const monitor = new WaveformMonitor(document.getElementById('wave-canvas'));
 
 // アトラス2D ⇔ 3Dホログラム 切替
@@ -625,6 +634,151 @@ function updateAlveolusMiniBar(eng, params, abg, now) {
   window.addEventListener('touchend', endDrag);
 })();
 
+// =========================================================
+// 画像診断・EIT モニタリング フローティングポップアップ
+// =========================================================
+window.toggleImagingPopup = (forceState) => {
+  imagingOpen = typeof forceState === 'boolean' ? forceState : !imagingOpen;
+  const popup = document.getElementById('imaging-popup');
+  const btn = document.getElementById('btn-toggle-imaging');
+  if (popup) popup.classList.toggle('hidden', !imagingOpen);
+  if (btn) {
+    btn.classList.toggle('bg-indigo-600', imagingOpen);
+    btn.classList.toggle('text-white', imagingOpen);
+    btn.classList.toggle('border-indigo-300', imagingOpen);
+    btn.classList.toggle('bg-slate-900/85', !imagingOpen);
+    btn.classList.toggle('text-indigo-200', !imagingOpen);
+    btn.classList.toggle('border-indigo-500/70', !imagingOpen);
+  }
+  if (imagingOpen && imagingView) {
+    imagingView.ensureImagesLoaded();
+    const metrics = imagingView.render(imagingTab, engine, engine.params, currentLungVentMode);
+    if (imagingTab === 'eit' || imagingTab === 'compare') {
+      updateEitMetricsPanel(metrics, performance.now(), true);
+    }
+  }
+};
+
+window.setImagingTab = (tab) => {
+  imagingTab = tab;
+  const popup = document.getElementById('imaging-popup');
+  const grid = document.getElementById('img-canvas-grid');
+  const paneXp = document.getElementById('img-pane-xp');
+  const paneCt = document.getElementById('img-pane-ct');
+  const paneEit = document.getElementById('img-pane-eit');
+  const metricsPanel = document.getElementById('eit-metrics-panel');
+
+  const isCompare = (tab === 'compare');
+  if (popup) {
+    popup.classList.toggle('w-[396px]', !isCompare);
+    popup.classList.toggle('w-[720px]', isCompare);
+  }
+  if (grid) {
+    grid.classList.toggle('grid-cols-1', !isCompare);
+    grid.classList.toggle('grid-cols-2', isCompare);
+  }
+
+  paneXp?.classList.toggle('hidden', tab !== 'xp');
+  paneCt?.classList.toggle('hidden', tab !== 'ct' && tab !== 'compare');
+  paneEit?.classList.toggle('hidden', tab !== 'eit' && tab !== 'compare');
+  metricsPanel?.classList.toggle('hidden', tab !== 'eit' && tab !== 'compare');
+
+  ['xp', 'ct', 'eit', 'compare'].forEach((t) => {
+    const b = document.getElementById(`img-tab-${t}`);
+    if (!b) return;
+    b.className = t === tab
+      ? 'px-1.5 py-1.5 rounded bg-indigo-600 text-white font-bold border border-indigo-400 transition'
+      : 'px-1.5 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition';
+  });
+
+  if (imagingOpen && imagingView) {
+    const metrics = imagingView.render(imagingTab, engine, engine.params, currentLungVentMode);
+    if (tab === 'eit' || tab === 'compare') {
+      updateEitMetricsPanel(metrics, performance.now(), true);
+    }
+  }
+};
+
+function updateEitMetricsPanel(metrics, now, force = false) {
+  if (!metrics) return;
+  if (!force && now - lastEitUiUpdate < 100) return;
+  lastEitUiUpdate = now;
+
+  for (let i = 0; i < 4; i++) {
+    const val = metrics.roi[i] ?? 25;
+    const elVal = document.getElementById(`eit-roi${i + 1}`);
+    const elBar = document.getElementById(`eit-bar${i + 1}`);
+    if (elVal) elVal.textContent = `${val}%`;
+    if (elBar) elBar.style.width = `${Math.min(100, val * 2)}%`;
+  }
+
+  const elCov = document.getElementById('eit-cov');
+  if (elCov) {
+    elCov.textContent = `${metrics.cov.toFixed(1)}%`;
+    elCov.className = (metrics.cov < 43 || metrics.cov > 57)
+      ? 'text-xs font-bold text-amber-300 tabular-nums'
+      : 'text-xs font-bold text-emerald-400 tabular-nums';
+  }
+
+  const elRl = document.getElementById('eit-rl');
+  if (elRl) {
+    elRl.textContent = `${metrics.rightPct}% / ${metrics.leftPct}%`;
+    elRl.className = Math.abs(metrics.rightPct - metrics.leftPct) >= 30
+      ? 'text-xs font-bold text-rose-400 tabular-nums'
+      : 'text-xs font-bold text-sky-300 tabular-nums';
+  }
+}
+
+// 画像診断ポップアップ ドラッグ移動（マウス・タッチ両対応）
+(function initImagingPopupDrag() {
+  const popup = document.getElementById('imaging-popup');
+  const header = document.getElementById('imaging-popup-header');
+  if (!popup || !header) return;
+
+  let dragging = false;
+  let offsetX = 0;
+  let offsetY = 0;
+
+  const startDrag = (clientX, clientY, target) => {
+    if (target && target.closest('button')) return;
+    const rect = popup.getBoundingClientRect();
+    dragging = true;
+    offsetX = clientX - rect.left;
+    offsetY = clientY - rect.top;
+    popup.style.left = `${rect.left}px`;
+    popup.style.top = `${rect.top}px`;
+    popup.style.right = 'auto';
+  };
+
+  const moveDrag = (clientX, clientY) => {
+    if (!dragging) return;
+    const maxLeft = Math.max(0, window.innerWidth - popup.offsetWidth);
+    const maxTop = Math.max(0, window.innerHeight - 48);
+    popup.style.left = `${Math.max(0, Math.min(maxLeft, clientX - offsetX))}px`;
+    popup.style.top = `${Math.max(0, Math.min(maxTop, clientY - offsetY))}px`;
+  };
+
+  const endDrag = () => { dragging = false; };
+
+  header.addEventListener('mousedown', (e) => startDrag(e.clientX, e.clientY, e.target));
+  window.addEventListener('mousemove', (e) => {
+    if (!dragging) return;
+    e.preventDefault();
+    moveDrag(e.clientX, e.clientY);
+  });
+  window.addEventListener('mouseup', endDrag);
+
+  header.addEventListener('touchstart', (e) => {
+    if (e.touches.length !== 1) return;
+    startDrag(e.touches[0].clientX, e.touches[0].clientY, e.target);
+  }, { passive: true });
+  window.addEventListener('touchmove', (e) => {
+    if (!dragging || e.touches.length !== 1) return;
+    moveDrag(e.touches[0].clientX, e.touches[0].clientY);
+  }, { passive: true });
+  window.addEventListener('touchend', endDrag);
+})();
+
 document.querySelectorAll('input').forEach(input => {
   input.addEventListener('input', syncUI);
   input.addEventListener('change', syncUI);
@@ -654,6 +808,13 @@ function loop(now) {
       alveolusView.render(engine, engine.params, latestAbg, now, dt, false);
       updateAlveolusMiniBar(engine, engine.params, latestAbg, now);
     }
+    // 画像診断・EIT：ポップアップ表示中かつアクティブタブのCanvasのみ描画（非表示・非アクティブは完全スキップ）
+    if (imagingOpen && imagingView) {
+      const eitMetrics = imagingView.render(imagingTab, engine, engine.params, currentLungVentMode);
+      if (imagingTab === 'eit' || imagingTab === 'compare') {
+        updateEitMetricsPanel(eitMetrics, now, false);
+      }
+    }
 
     // バッジ更新
     const pBadge = document.getElementById('phase-badge');
@@ -679,6 +840,12 @@ function loop(now) {
     if (alveolusOpen && alveolusView) {
       alveolusView.render(engine, engine.params, latestAbg, now, 0, true);
       updateAlveolusMiniBar(engine, engine.params, latestAbg, now);
+    }
+    if (imagingOpen && imagingView) {
+      const eitMetrics = imagingView.render(imagingTab, engine, engine.params, currentLungVentMode);
+      if (imagingTab === 'eit' || imagingTab === 'compare') {
+        updateEitMetricsPanel(eitMetrics, now, false);
+      }
     }
   }
 

@@ -82,6 +82,7 @@
           <button id="btn-toggle-section" onclick="toggleLungSection()" class="px-2 py-0.5 text-[10px] bg-slate-900/80 hover:bg-teal-900 text-teal-200 rounded border border-teal-700/60 backdrop-blur">肺断面 (透過): OFF</button>
           <button id="btn-toggle-heart" onclick="toggleHeart3D()" class="px-2 py-0.5 text-[10px] bg-rose-900/80 hover:bg-rose-800 text-rose-200 rounded border border-rose-700/60 backdrop-blur">心臓: ON</button>
           <button id="btn-toggle-alveolus" onclick="toggleAlveolusPopup()" class="px-2 py-0.5 text-[10px] bg-slate-900/85 hover:bg-sky-900 text-sky-200 rounded border border-sky-600/70 font-bold backdrop-blur transition" title="肺胞ミクロ動態・ガス交換ズームウィンドウを開く">🔬 肺胞ズーム</button>
+          <button id="btn-toggle-imaging" onclick="toggleImagingPopup()" class="px-2 py-0.5 text-[10px] bg-slate-900/85 hover:bg-indigo-900 text-indigo-200 rounded border border-indigo-500/70 font-bold backdrop-blur transition" title="胸部Xp・胸部CT・EITモニタリングを開く">🩻 画像診断 / EIT</button>
         </div>
 
         <!-- ミストリガー警告アラートバッジ -->
@@ -429,6 +430,88 @@
     </div>
   </div>
 
-  <script type="module" src="./src/main.js?v=20261122b"></script>
+  <!-- 画像診断・EITモニタリング フローティングポップアップ（背景非暗転・ドラッグ移動対応） -->
+  <div id="imaging-popup" class="hidden fixed top-16 left-4 z-50 w-[396px] max-w-[calc(100vw-1.5rem)] rounded-lg bg-slate-900/95 border border-indigo-500/80 shadow-2xl backdrop-blur-md overflow-hidden select-none transition-[width] duration-200">
+    <!-- ドラッグ可能ヘッダー -->
+    <div id="imaging-popup-header" class="flex items-center justify-between px-3 py-2 bg-slate-800/95 border-b border-slate-700 cursor-move">
+      <div class="flex items-center gap-1.5">
+        <span class="text-sm">🩻</span>
+        <span class="text-xs font-bold text-indigo-300">画像診断・EIT モニタリング</span>
+      </div>
+      <div class="flex items-center gap-2">
+        <span class="text-[10px] text-slate-400 hidden sm:inline">ドラッグ移動可</span>
+        <button type="button" onclick="toggleImagingPopup(false)" class="w-6 h-6 flex items-center justify-center rounded bg-slate-700/80 hover:bg-rose-600 text-slate-200 hover:text-white text-xs font-bold transition" title="閉じる">✕</button>
+      </div>
+    </div>
+
+    <!-- 4つの切り替えタブ -->
+    <div class="px-2.5 pt-2 pb-1.5 bg-slate-900/90 border-b border-slate-800 grid grid-cols-4 gap-1 text-[10px]">
+      <button id="img-tab-xp" onclick="setImagingTab('xp')" class="px-1.5 py-1.5 rounded bg-indigo-600 text-white font-bold border border-indigo-400 transition">胸部Xp (正面)</button>
+      <button id="img-tab-ct" onclick="setImagingTab('ct')" class="px-1.5 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition">胸部CT (水平断)</button>
+      <button id="img-tab-eit" onclick="setImagingTab('eit')" class="px-1.5 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition">EIT (換気分布)</button>
+      <button id="img-tab-compare" onclick="setImagingTab('compare')" class="px-1.5 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition">CT＋EIT 比較</button>
+    </div>
+
+    <!-- Canvas 表示領域 -->
+    <div class="p-2.5 flex flex-col gap-2">
+      <div id="img-canvas-grid" class="grid grid-cols-1 gap-2">
+        <!-- 胸部Xp Canvas -->
+        <div id="img-pane-xp" class="relative rounded overflow-hidden border border-slate-800 bg-slate-950 shadow-inner">
+          <canvas id="xpCanvas" width="340" height="360" class="w-full h-auto block"></canvas>
+        </div>
+
+        <!-- 胸部CT Canvas -->
+        <div id="img-pane-ct" class="hidden relative rounded overflow-hidden border border-slate-800 bg-slate-950 shadow-inner">
+          <canvas id="ctCanvas" width="340" height="280" class="w-full h-auto block"></canvas>
+        </div>
+
+        <!-- EIT Canvas -->
+        <div id="img-pane-eit" class="hidden relative rounded overflow-hidden border border-slate-800 bg-slate-950 shadow-inner">
+          <canvas id="eitCanvas" width="340" height="280" class="w-full h-auto block"></canvas>
+        </div>
+      </div>
+
+      <!-- EIT 数値パネル（EIT / CT+EIT比較タブ表示時のみ表示） -->
+      <div id="eit-metrics-panel" class="hidden bg-slate-950/90 p-2.5 rounded border border-slate-800 space-y-2 text-[11px]">
+        <!-- ROI 1〜4 換気割合バー -->
+        <div class="grid grid-cols-4 gap-1.5 text-center">
+          <div class="bg-slate-900 rounded p-1.5 border border-slate-800">
+            <div class="text-[9px] text-slate-400">ROI 1 (腹側)</div>
+            <div id="eit-roi1" class="text-sm font-bold text-sky-300 tabular-nums">25%</div>
+            <div class="w-full h-1 bg-slate-800 rounded overflow-hidden mt-1"><div id="eit-bar1" class="h-full bg-sky-400" style="width:25%"></div></div>
+          </div>
+          <div class="bg-slate-900 rounded p-1.5 border border-slate-800">
+            <div class="text-[9px] text-slate-400">ROI 2 (中腹)</div>
+            <div id="eit-roi2" class="text-sm font-bold text-cyan-300 tabular-nums">25%</div>
+            <div class="w-full h-1 bg-slate-800 rounded overflow-hidden mt-1"><div id="eit-bar2" class="h-full bg-cyan-400" style="width:25%"></div></div>
+          </div>
+          <div class="bg-slate-900 rounded p-1.5 border border-slate-800">
+            <div class="text-[9px] text-slate-400">ROI 3 (中背)</div>
+            <div id="eit-roi3" class="text-sm font-bold text-blue-300 tabular-nums">25%</div>
+            <div class="w-full h-1 bg-slate-800 rounded overflow-hidden mt-1"><div id="eit-bar3" class="h-full bg-blue-400" style="width:25%"></div></div>
+          </div>
+          <div class="bg-slate-900 rounded p-1.5 border border-slate-800">
+            <div class="text-[9px] text-slate-400">ROI 4 (背側)</div>
+            <div id="eit-roi4" class="text-sm font-bold text-indigo-300 tabular-nums">25%</div>
+            <div class="w-full h-1 bg-slate-800 rounded overflow-hidden mt-1"><div id="eit-bar4" class="h-full bg-indigo-400" style="width:25%"></div></div>
+          </div>
+        </div>
+
+        <!-- CoV % と 左右換気比 (R / L %) -->
+        <div class="grid grid-cols-2 gap-2 pt-1 border-t border-slate-800">
+          <div class="flex items-center justify-between bg-slate-900/90 px-2.5 py-1.5 rounded border border-slate-800">
+            <span class="text-[10px] text-slate-400">換気重心 (CoV)</span>
+            <span id="eit-cov" class="text-xs font-bold text-emerald-400 tabular-nums">50.0%</span>
+          </div>
+          <div class="flex items-center justify-between bg-slate-900/90 px-2.5 py-1.5 rounded border border-slate-800">
+            <span class="text-[10px] text-slate-400">左右換気比 (R / L)</span>
+            <span id="eit-rl" class="text-xs font-bold text-sky-300 tabular-nums">50% / 50%</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="./src/main.js?v=20261122c"></script>
 </body>
 </html>
