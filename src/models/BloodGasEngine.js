@@ -19,6 +19,8 @@ export class BloodGasEngine {
     this.pfRatio = 463;
     this.pbw = 66.0;
     this.vtPerKg = 6.8;
+    this.shunt = 0.04;
+    this.va = 4500.0;
 
     // 追従時定数（秒）：PaO2はやや速く、PaCO2はゆっくり追従
     this.tauPaO2 = 4.5;
@@ -145,6 +147,8 @@ export class BloodGasEngine {
     const t = this.computeTargets(params, pathology, vte, measuredRR, lungVentMode);
     this.pbw = t.pbw;
     this.vtPerKg = t.vtPerKg;
+    this.shunt = t.shunt;
+    this.va = t.va;
 
     const alphaO2 = 1.0 - Math.exp(-dt / this.tauPaO2);
     const alphaCO2 = 1.0 - Math.exp(-dt / this.tauPaCO2);
@@ -164,7 +168,9 @@ export class BloodGasEngine {
       hco3: this.hco3,
       pfRatio: this.pfRatio,
       pbw: this.pbw,
-      vtPerKg: this.vtPerKg
+      vtPerKg: this.vtPerKg,
+      shunt: this.shunt,
+      va: this.va
     };
   }
 }

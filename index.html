@@ -81,6 +81,7 @@
         <div class="absolute top-2 right-2 flex items-center gap-1 z-10">
           <button id="btn-toggle-section" onclick="toggleLungSection()" class="px-2 py-0.5 text-[10px] bg-slate-900/80 hover:bg-teal-900 text-teal-200 rounded border border-teal-700/60 backdrop-blur">肺断面 (透過): OFF</button>
           <button id="btn-toggle-heart" onclick="toggleHeart3D()" class="px-2 py-0.5 text-[10px] bg-rose-900/80 hover:bg-rose-800 text-rose-200 rounded border border-rose-700/60 backdrop-blur">心臓: ON</button>
+          <button id="btn-toggle-alveolus" onclick="toggleAlveolusPopup()" class="px-2 py-0.5 text-[10px] bg-slate-900/85 hover:bg-sky-900 text-sky-200 rounded border border-sky-600/70 font-bold backdrop-blur transition" title="肺胞ミクロ動態・ガス交換ズームウィンドウを開く">🔬 肺胞ズーム</button>
         </div>
 
         <!-- ミストリガー警告アラートバッジ -->
@@ -378,6 +379,56 @@
     </div>
   </div>
 
-  <script type="module" src="./src/main.js?v=20261122"></script>
+  <!-- 肺胞ズーム（ミクロ動態・ガス交換）フローティングポップアップ（背景非暗転・ドラッグ移動対応） -->
+  <div id="alveolus-popup" class="hidden fixed top-16 right-4 z-50 w-[384px] max-w-[calc(100vw-1.5rem)] rounded-lg bg-slate-900/95 border border-sky-600/80 shadow-2xl backdrop-blur-md overflow-hidden select-none">
+    <!-- ドラッグ可能ヘッダー -->
+    <div id="alveolus-popup-header" class="flex items-center justify-between px-3 py-2 bg-slate-800/95 border-b border-slate-700 cursor-move">
+      <div class="flex items-center gap-1.5">
+        <span class="text-sm">🔬</span>
+        <span class="text-xs font-bold text-sky-300">肺胞ズーム（ミクロ動態・ガス交換）</span>
+      </div>
+      <div class="flex items-center gap-2">
+        <span class="text-[10px] text-slate-400 hidden sm:inline">ドラッグ移動可</span>
+        <button type="button" onclick="toggleAlveolusPopup(false)" class="w-6 h-6 flex items-center justify-center rounded bg-slate-700/80 hover:bg-rose-600 text-slate-200 hover:text-white text-xs font-bold transition" title="閉じる">✕</button>
+      </div>
+    </div>
+
+    <!-- 肺胞断面リアルタイムCanvas -->
+    <div class="p-2.5 flex flex-col gap-2">
+      <div class="relative rounded overflow-hidden border border-slate-800 bg-slate-950 shadow-inner">
+        <canvas id="alveolusCanvas" width="360" height="320" class="w-full h-auto block"></canvas>
+      </div>
+
+      <!-- コンパクト凡例 -->
+      <div class="flex flex-wrap justify-center gap-x-3 gap-y-0.5 text-[10px] text-slate-300 px-1">
+        <span><span class="text-sky-400">●</span> O2 (FiO2)</span>
+        <span><span class="text-amber-300">●</span> CO2</span>
+        <span><span class="text-purple-400">●</span>→<span class="text-rose-500">●</span> 赤血球</span>
+        <span><span class="text-cyan-300">■</span> 浸出液</span>
+      </div>
+
+      <!-- ミクロ状態ミニバー（Palv, FiO2, PaO2, 状態ラベル） -->
+      <div class="grid grid-cols-3 gap-1.5 bg-slate-950/90 p-2 rounded border border-slate-800 text-center">
+        <div>
+          <div class="text-[10px] text-slate-400">Palv</div>
+          <div id="alv-palv" class="text-sm font-bold text-amber-300 tabular-nums">5.0 <span class="text-[9px] font-normal text-slate-500">cmH2O</span></div>
+        </div>
+        <div>
+          <div class="text-[10px] text-slate-400">FiO2</div>
+          <div id="alv-fio2" class="text-sm font-bold text-cyan-300 tabular-nums">40 <span class="text-[9px] font-normal text-slate-500">%</span></div>
+        </div>
+        <div>
+          <div class="text-[10px] text-slate-400">PaO2</div>
+          <div id="alv-pao2" class="text-sm font-bold text-emerald-400 tabular-nums">175 <span class="text-[9px] font-normal text-slate-500">mmHg</span></div>
+        </div>
+        <div class="col-span-3 pt-1.5 mt-0.5 border-t border-slate-800 flex items-center justify-between px-1">
+          <span class="text-[10px] text-slate-400">肺胞状態</span>
+          <span id="alv-status" class="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-700/90 text-emerald-100 border border-emerald-500/60">正常</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="./src/main.js?v=20261122b"></script>
 </body>
 </html>

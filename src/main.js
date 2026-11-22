@@ -3,12 +3,27 @@ import { VentilatorEngine } from './models/VentilatorEngine.js';
 import { BloodGasEngine } from './models/BloodGasEngine.js';
 import { AnatomyRenderer } from './views/AnatomyRenderer.js';
 import { AtlasAnatomyRenderer } from './views/AtlasAnatomyRenderer.js';
+import { AlveolusRenderer } from './views/AlveolusRenderer.js';
 import { WaveformMonitor } from './views/WaveformMonitor.js';
 
 let simPaused = false;
 let anatomyMode = 'atlas'; // 'atlas' | '3d'
 let currentLungVentMode = 'both'; // 'both' | 'right' | 'left'
 let abgOpen = false;
+let alveolusOpen = false;
+let lastAlveolusUiUpdate = 0;
+let lastAlveolusStatusKey = '';
+let latestAbg = {
+  pH: 7.40,
+  paCO2: 40.0,
+  paO2: 175.0,
+  hco3: 24.0,
+  pfRatio: 438,
+  pbw: 66.0,
+  vtPerKg: 6.8,
+  shunt: 0.04,
+  va: 4500.0
+};
 let latestMeasuredVte = null;
 let latestMeasuredRR = null;
 let clinicalFlags = {
@@ -25,6 +40,8 @@ const bloodGas = new BloodGasEngine();
 const anatomyContainer = document.getElementById('anatomy-3d-container');
 const anatomy = new AnatomyRenderer(anatomyContainer);
 const atlasAnatomy = new AtlasAnatomyRenderer(document.getElementById('lungCanvas'));
+const alveolusCanvas = document.getElementById('alveolusCanvas');
+const alveolusView = alveolusCanvas ? new AlveolusRenderer(alveolusCanvas) : null;
 const monitor = new WaveformMonitor(document.getElementById('wave-canvas'));
 
 // アトラス2D ⇔ 3Dホログラム 切替
@@ -476,6 +493,138 @@ function updateAbgDisplay(abg) {
   }
 }
 
+// 肺胞ズーム フローティングポップアップ開閉（非表示時は描画完全スキップ）
+window.toggleAlveolusPopup = (forceState) => {
+  alveolusOpen = typeof forceState === 'boolean' ? forceState : !alveolusOpen;
+  const popup = document.getElementById('alveolus-popup');
+  const btn = document.getElementById('btn-toggle-alveolus');
+  if (popup) {
+    popup.classList.toggle('hidden', !alveolusOpen);
+  }
+  if (btn) {
+    btn.classList.toggle('bg-sky-600', alveolusOpen);
+    btn.classList.toggle('text-white', alveolusOpen);
+    btn.classList.toggle('border-sky-300', alveolusOpen);
+    btn.classList.toggle('bg-slate-900/85', !alveolusOpen);
+    btn.classList.toggle('text-sky-200', !alveolusOpen);
+    btn.classList.toggle('border-sky-600/70', !alveolusOpen);
+  }
+  if (alveolusOpen && alveolusView) {
+    alveolusView.ensureLoaded();
+    lastAlveolusUiUpdate = 0; // 開いた直後にミニバーを即時更新
+  }
+};
+
+// 肺胞ポップアップ内ミニバー更新（ポップアップ表示中かつ間引き更新でDOM負荷を最小化）
+function updateAlveolusMiniBar(eng, params, abg, now) {
+  if (now - lastAlveolusUiUpdate < 90) return;
+  lastAlveolusUiUpdate = now;
+
+  const elPalv = document.getElementById('alv-palv');
+  const elFio2 = document.getElementById('alv-fio2');
+  const elPao2 = document.getElementById('alv-pao2');
+  const elStatus = document.getElementById('alv-status');
+
+  const palv = eng?.Palv ?? params?.peep ?? 5;
+  const fio2 = params?.fio2 ?? 40;
+  const paO2 = abg?.paO2 ?? 175;
+
+  if (elPalv) {
+    elPalv.innerHTML = `${palv.toFixed(1)} <span class="text-[9px] font-normal text-slate-500">cmH2O</span>`;
+    elPalv.className = palv >= 30
+      ? 'text-sm font-bold text-rose-400 tabular-nums'
+      : 'text-sm font-bold text-amber-300 tabular-nums';
+  }
+  if (elFio2) {
+    elFio2.innerHTML = `${Math.round(fio2)} <span class="text-[9px] font-normal text-slate-500">%</span>`;
+  }
+  if (elPao2) {
+    elPao2.innerHTML = `${Math.round(paO2)} <span class="text-[9px] font-normal text-slate-500">mmHg</span>`;
+    elPao2.className = paO2 < 60
+      ? 'text-sm font-bold text-rose-400 tabular-nums'
+      : paO2 < 80
+        ? 'text-sm font-bold text-amber-300 tabular-nums'
+        : 'text-sm font-bold text-emerald-400 tabular-nums';
+  }
+
+  if (elStatus && alveolusView) {
+    const st = alveolusView.evaluateStatus(eng, params, abg);
+    const key = `${st.level}:${st.text}`;
+    if (key !== lastAlveolusStatusKey) {
+      lastAlveolusStatusKey = key;
+      elStatus.textContent = st.text;
+      if (st.level === 'danger') {
+        elStatus.className = 'px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-rose-600/95 text-white border border-rose-300/80 animate-pulse';
+      } else if (st.level === 'warn') {
+        elStatus.className = 'px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-600/95 text-white border border-amber-300/70';
+      } else if (st.level === 'info') {
+        elStatus.className = 'px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-sky-700/95 text-sky-100 border border-sky-400/70';
+      } else {
+        elStatus.className = 'px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-700/90 text-emerald-100 border border-emerald-500/60';
+      }
+    }
+  }
+}
+
+// 肺胞ポップアップ ヘッダードラッグ移動（マウス・タッチ両対応）
+(function initAlveolusPopupDrag() {
+  const popup = document.getElementById('alveolus-popup');
+  const header = document.getElementById('alveolus-popup-header');
+  if (!popup || !header) return;
+
+  let dragging = false;
+  let offsetX = 0;
+  let offsetY = 0;
+
+  const startDrag = (clientX, clientY, target) => {
+    if (target && target.closest('button')) return;
+    const rect = popup.getBoundingClientRect();
+    dragging = true;
+    offsetX = clientX - rect.left;
+    offsetY = clientY - rect.top;
+    // right 指定から left/top 指定へ切替
+    popup.style.left = `${rect.left}px`;
+    popup.style.top = `${rect.top}px`;
+    popup.style.right = 'auto';
+  };
+
+  const moveDrag = (clientX, clientY) => {
+    if (!dragging) return;
+    const maxLeft = Math.max(0, window.innerWidth - popup.offsetWidth);
+    const maxTop = Math.max(0, window.innerHeight - 48);
+    const nextLeft = Math.max(0, Math.min(maxLeft, clientX - offsetX));
+    const nextTop = Math.max(0, Math.min(maxTop, clientY - offsetY));
+    popup.style.left = `${nextLeft}px`;
+    popup.style.top = `${nextTop}px`;
+  };
+
+  const endDrag = () => {
+    dragging = false;
+  };
+
+  header.addEventListener('mousedown', (e) => {
+    startDrag(e.clientX, e.clientY, e.target);
+  });
+  window.addEventListener('mousemove', (e) => {
+    if (!dragging) return;
+    e.preventDefault();
+    moveDrag(e.clientX, e.clientY);
+  });
+  window.addEventListener('mouseup', endDrag);
+
+  header.addEventListener('touchstart', (e) => {
+    if (e.touches.length !== 1) return;
+    const t = e.touches[0];
+    startDrag(t.clientX, t.clientY, e.target);
+  }, { passive: true });
+  window.addEventListener('touchmove', (e) => {
+    if (!dragging || e.touches.length !== 1) return;
+    const t = e.touches[0];
+    moveDrag(t.clientX, t.clientY);
+  }, { passive: true });
+  window.addEventListener('touchend', endDrag);
+})();
+
 document.querySelectorAll('input').forEach(input => {
   input.addEventListener('input', syncUI);
   input.addEventListener('change', syncUI);
@@ -491,14 +640,19 @@ function loop(now) {
     const sample = engine.update(dt);
     const abgVte = Number.isFinite(engine.lastVte) ? engine.lastVte : (latestMeasuredVte ?? engine.params.vtSet);
     const abgRr = Number.isFinite(engine.measuredRR) ? engine.measuredRR : (latestMeasuredRR ?? engine.params.rrSet);
-    const abg = bloodGas.update(dt, engine.params, engine.pathology, abgVte, abgRr, currentLungVentMode);
-    updateAbgDisplay(abg);
+    latestAbg = bloodGas.update(dt, engine.params, engine.pathology, abgVte, abgRr, currentLungVentMode);
+    updateAbgDisplay(latestAbg);
     monitor.pushSample(sample);
     monitor.render(engine.params.peep, false);
     if (anatomyMode === 'atlas') {
       atlasAnatomy.render(engine, engine.params, now);
     } else {
       anatomy.render(engine, engine.params, now);
+    }
+    // 肺胞ズーム：ポップアップが開いている間のみ描画・ミニバー更新を実行（非表示時は完全スキップ）
+    if (alveolusOpen && alveolusView) {
+      alveolusView.render(engine, engine.params, latestAbg, now, dt, false);
+      updateAlveolusMiniBar(engine, engine.params, latestAbg, now);
     }
 
     // バッジ更新
@@ -521,6 +675,10 @@ function loop(now) {
     } else {
       anatomy.controls.update();
       anatomy.renderer.render(anatomy.scene, anatomy.camera);
+    }
+    if (alveolusOpen && alveolusView) {
+      alveolusView.render(engine, engine.params, latestAbg, now, 0, true);
+      updateAlveolusMiniBar(engine, engine.params, latestAbg, now);
     }
   }
 
